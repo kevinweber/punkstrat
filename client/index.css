@@ -1,0 +1,103 @@
+:root {
+    --body-border-top: 5px;
+    --text: #fff;
+    --color-primary: #4E97CC;
+    --color-dark: #1e1e1e;
+    --color-darker: #0f0f0f;
+    --color-darkest: #000;
+}
+
+html {
+    background: linear-gradient(180deg, var(--color-dark) 0%, var(--color-darkest) 60%, var(--color-darker) 100%);
+    color: var(--text);
+    font: 16px/125% 'Source Sans', arial, sans-serif;
+    font-variation-settings: 'wght' 200;
+    -webkit-font-smoothing: antialiased;
+}
+
+body {
+    background-image: url("./media/image/bg-pattern.svg?1");
+    border-top: var(--body-border-top) solid var(--color-primary);
+    background-size: 24px;
+}
+
+* {
+    font-size: 1rem;
+    line-height: 1em;
+    border: 0;
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+::-webkit-selection {
+    background: var(--color-primary);
+    color: var(--text);
+    text-shadow: none;
+}
+
+::selection {
+    background: var(--color-primary);
+    color: var(--text);
+    text-shadow: none;
+}
+
+@font-face {
+    font-family: 'Source Sans';
+    src:
+        url('./media/font/SourceSans3-VariableFont_wght.ttf') format('woff2');
+}
+
+@font-face {
+    font-family: 'Cairo';
+    src:
+        url('./media/font/Cairo-VariableFont_wght.woff2') format('woff2');
+}
+
+.page-container {
+    display: flex;
+    min-height: calc(100vh - var(--body-border-top));
+    max-width: 600px;
+    margin-left: auto;
+    margin-right: auto;
+    align-items: center;
+    padding: 20px;
+}
+
+h1 {
+    font-family: 'Cairo', 'Source Sans', arial, sans-serif;
+    font-variation-settings: 'wght' 400;
+    font-size: 1.8em;
+}
+
+p {
+    line-height: 1.3em;
+    font-size: 1.2em;
+    padding-top: 1em;
+}
+
+span {
+    font-size: inherit;
+}
+
+img {
+    height: auto;
+    width: 100%;
+}
+
+.highlight {
+    font-variation-settings: 'wght' 400;
+}
+
+.logo-wrapper {
+    color: var(--color-primary);
+    width: 60px;
+}
+
+.wordmark {
+    background: var(--color-primary);
+    color: var(--color-dark);
+    display: inline-block;
+    padding: 8px 14px;
+    margin-top: 1em;
+}
