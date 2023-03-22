@@ -10,7 +10,7 @@
 html {
     background: linear-gradient(180deg, var(--color-dark) 0%, var(--color-darkest) 60%, var(--color-darker) 100%);
     color: var(--text);
-    font: 16px/125% 'Source Sans', arial, sans-serif;
+    font: 24px/125% 'Source Sans', arial, sans-serif;
     font-variation-settings: 'wght' 200;
     -webkit-font-smoothing: antialiased;
 }
@@ -57,11 +57,11 @@ body {
 .page-container {
     display: flex;
     min-height: calc(100vh - var(--body-border-top));
-    max-width: 600px;
+    max-width: 38em;
     margin-left: auto;
     margin-right: auto;
     align-items: center;
-    padding: 20px;
+    padding: 1.5em 20px;
 }
 
 h1 {
@@ -92,7 +92,7 @@ img {
 .logo-wrapper {
     color: var(--color-primary);
     margin-top: 1.5em;
-    width: 60px;
+    width: 70px;
 }
 
 .wordmark {
