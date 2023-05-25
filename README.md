@@ -6,6 +6,10 @@
 * Run `npm run build:libs:preact` and `npm run build:libs:htm` to update the Preact and HTM dependencies.
 * Run `npm run dev` to run a Node server in development, then view the site on <http://localhost:8000/>.
 
+To upgrade dependencies to latest minor version quickly:
+
+* Run `npm upgrade --save`
+
 Tech stack:
 
 * No build for the app code. Less headaches.
