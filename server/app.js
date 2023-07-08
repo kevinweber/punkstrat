@@ -10,7 +10,10 @@ const clientPath = path.join(__dirname, '..', 'client');
 
 app.use(express.static(clientPath));
 
-app.get('*', (req, res) => res.sendFile(path.resolve(clientPath, 'index.html')));
+// Emulate GitHub Pages behavior: Any URL that points to a non-existing HTML file gets redirected to 404.html
+// Whever this happens, we manually redirect from that 404.html to our "/" route and take over using client-side routing
+app.get('/', (req, res) => res.sendFile(path.resolve(clientPath, 'index.html')));
+app.get('/*', (req, res) => res.sendFile(path.resolve(clientPath, '404.html')));
 
 app.listen(PORT, () => {
     console.log(`⚡️[server]: Server is running at port ${PORT} in NODE_ENV: ${process.env.NODE_ENV}`);
