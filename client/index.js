@@ -17,7 +17,8 @@ function App() {
     const isHashPath = window.location.hash.startsWith('#/');
     const wasRedirectedFrom404 = isHome && isHashPath;
     if (wasRedirectedFrom404) {
-      // "path+search+hash" got attached after `#`. Replace that first `#` and replace history entry with the attachment
+      // The route "path+search+hash" got attached after `#`.
+      // Replace history entry with the attachment route.
       route(window.location.hash.replace('#', ''), true);
     }
   });
