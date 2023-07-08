@@ -5,12 +5,10 @@
  * "Cannot read properties of null (reading '__H')"
  */
 import { h, render, Component } from 'preact';
-// import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
-// import Router, { route } from 'preact-router';
-// import { Link } from 'preact-router/match';
+// import { useEffect } from 'preact/hooks';
+import { Router } from 'preact-router';
 
 export {
     h, render, Component,
-    //useCallback, useEffect, useRef, useState,
-    //Router, route, Link
+    Router,
 };

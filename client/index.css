@@ -64,16 +64,68 @@ body {
     padding: 1.5em 20px;
 }
 
-h1 {
+div {
+    width: 100%;
+}
+
+h1,
+h2 {
     font-family: 'Cairo', 'Source Sans', arial, sans-serif;
     font-variation-settings: 'wght' 600;
+}
+
+h3 {
+    font-variation-settings: 'wght' 400;
+}
+
+.title-bar {
+    display: flex;
+    flex-wrap: wrap;
+}
+
+.title {
     font-size: 2.4em;
 }
 
-p {
+.subpage .title {
+    font-size: 1.6em;
+}
+
+p,
+article {
     line-height: 1.3em;
-    font-size: 1.2em;
+    font-size: 1em;
     padding-top: 1.2em;
+}
+
+.home p {
+    font-size: 1.2em;
+}
+
+article {
+    background: rgba(255, 255, 255, 0.07);
+    border-left: 3px solid var(--color-primary);
+    padding-left: 20px;
+    padding-right: 20px;
+    margin-top: 1.2em;
+    padding-bottom: 1.2em;
+}
+
+a:not(.unstyled) {
+    border-bottom: 1px solid var(--text);
+    color: var(--text);
+    display: inline-block;
+    font-variation-settings: 'wght' 400;
+    text-decoration: none;
+    line-height: 1em;
+    font-size: 1em;
+    padding-bottom: 1px;
+}
+
+a:hover:not(.unstyled),
+a:focus:not(.unstyled) {
+    border-bottom: 3px solid var(--text);
+    padding-bottom: 0;
 }
 
 span {
@@ -91,6 +143,7 @@ img {
 
 .logo-wrapper {
     color: var(--color-primary);
+    display: inline-block;
     margin-top: 1.5em;
     width: 3em;
 }
@@ -100,4 +153,11 @@ img {
     color: var(--color-dark);
     display: inline-block;
     padding: 8px 14px;
+}
+
+.wordmark-reverse {
+    border: 3px solid var(--color-primary);
+    color: var(--color-primary);
+    display: inline-block;
+    padding: 5px 11px;
 }
