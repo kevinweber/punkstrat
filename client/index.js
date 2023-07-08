@@ -2,6 +2,7 @@ import { h, render, route, Router, useEffect } from './libs/preact.js';
 import htm from './libs/htm.js';
 import Home from './views/Home.js';
 import CaseStudies from '../views/CaseStudies.js';
+import Unknown from '../views/Unknown.js';
 
 const html = htm.bind(h);
 
@@ -25,6 +26,7 @@ function App() {
     <${Router}>
       <${Home} path="/" />
       <${CaseStudies} path="/case-studies" />
+      <${Unknown} default />
     <//>
   `;
 }
