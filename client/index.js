@@ -8,12 +8,18 @@ import Unknown from '../views/Unknown.js';
 const html = htm.bind(h);
 
 function App() {
+  function handleRouteChange({ current }) {
+    if (document.title !== current.props.title) {
+      document.title = current.props.title;
+    }
+  }
+
   return html`
-    <${Router}>
-      <${Home} path="/" />
-      <${CaseStudies} path="/case-studies" />
-      <${CryptoPunks} path="/cryptopunks" />
-      <${Unknown} default />
+    <${Router} onChange="${handleRouteChange}">
+      <${Home} path="/" title="PunkStrat" />
+      <${CaseStudies} path="/case-studies" title="PunkStrat Case Studies" />
+      <${CryptoPunks} path="/cryptopunks" title="PunkStrat for CryptoPunks" />
+      <${Unknown} default title="PunkStrat 404" />
     <//>
   `;
 }
