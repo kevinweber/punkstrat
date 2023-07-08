@@ -1,6 +1,6 @@
 import { h } from '../libs/preact.js';
 import htm from '../libs/htm.js';
-import logo from '../logo.js';
+import LogoLinkHome from '../components/LogoLinkHome.js';
 
 const html = htm.bind(h);
 
@@ -23,7 +23,7 @@ export default function CaseStudies() {
         <p>Results: abc</p>
       </article>
       
-      <div class="logo-wrapper">${logo()}</div>
+      <${LogoLinkHome}/>
     </div>
   `;
 }

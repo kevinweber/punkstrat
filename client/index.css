@@ -111,7 +111,7 @@ article {
     padding-bottom: 1.2em;
 }
 
-a {
+a:not(.unstyled) {
     border-bottom: 1px solid var(--text);
     color: var(--text);
     display: inline-block;
@@ -122,8 +122,8 @@ a {
     padding-bottom: 1px;
 }
 
-a:hover,
-a:focus {
+a:hover:not(.unstyled),
+a:focus:not(.unstyled) {
     border-bottom: 3px solid var(--text);
     padding-bottom: 0;
 }
@@ -143,6 +143,7 @@ img {
 
 .logo-wrapper {
     color: var(--color-primary);
+    display: inline-block;
     margin-top: 1.5em;
     width: 3em;
 }

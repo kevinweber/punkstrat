@@ -1,9 +1,9 @@
-import { h } from './libs/preact.js';
-import htm from './libs/htm.js';
+import { h } from '../libs/preact.js';
+import htm from '../libs/htm.js';
 
 const html = htm.bind(h);
 
-export default function logo() {
+export default function Logo() {
     return html`
         <svg clip-rule="evenodd" fill-rule="evenodd" stroke-linejoin="round" stroke-miterlimit="2" viewBox="0 0 11 11" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
             <path d="m0 0h11v11h-11z" fill="none"/>
