@@ -1,5 +1,2 @@
-# Encourage crawling of homepage
-Allow: /$
-
-# Discourage crawling of all other pages
-Disallow: /*
+# Encourage crawling of all pages
+Allow: /
