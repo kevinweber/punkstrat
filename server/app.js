@@ -14,11 +14,18 @@ app.use(express.static(clientPath));
 // Emulate GitHub Pages behavior:
 // Any URL that points to a non-existing HTML file gets redirected to 404.html
 app.get('/', (req, res) => res.sendFile(path.resolve(clientPath, 'index.html')));
-app.get('/:page', (req, res) => {
-    const absolutePath = path.join(clientPath, `${req.params.page}.html`);
-    if (fs.existsSync(absolutePath)) {
-        return res.sendFile(path.resolve(clientPath, `${req.params.page}.html`));
+app.get('/:page/:subpage?', (req, res) => {
+    function getPath(runFunction) {
+        const isSubPage = !!req.params.subpage;
+        return isSubPage ? runFunction(clientPath, req.params.page, `${req.params.subpage}.html`) : runFunction(clientPath, `${req.params.page}.html`);
     }
+
+    const absolutePath = getPath(path.join);
+
+    if (fs.existsSync(absolutePath)) {
+        return res.sendFile(getPath(path.resolve));
+    }
+
     return res.status(404).sendFile(path.resolve(clientPath, '404.html'));
 });
 
