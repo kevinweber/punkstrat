@@ -133,8 +133,12 @@ function Wheel({ width, height, }) {
   const data = buildHierarchy(segments);
   const root = partition(data);
 
+  function onmouseleave() {
+    setSegmentsActive([]);
+  }
+
   // TODO: When hoving a segment, display its rating
-  function onmouseenter(e, d) {
+  function onmouseenter(d) {
     // Get the ancestors of the current segment, minus the root
     const sequence = d
       .ancestors()
@@ -145,7 +149,7 @@ function Wheel({ width, height, }) {
     setSegmentsActive(activeSegments);
   }
 
-  function onclick(e, d) {
+  function onclick(d) {
     // Get the ancestors of the current segment, minus the root
     const sequence = d
       .ancestors()
@@ -168,10 +172,11 @@ function Wheel({ width, height, }) {
         stroke: var(--color-primary);
         fill: var(--color-darker);
         fill-opacity: 0.6;
+        transition: fill 0.2s;
       }
       .segments path.active {
         fill: var(--color-primary);
-        fill-opacity: 0.8;
+        fill-opacity: 0.7;
       }
       .segments path.selected {
         fill: var(--color-primary);
@@ -198,7 +203,7 @@ function Wheel({ width, height, }) {
       ${root
       .descendants()
       .filter((d) => d.depth) // Don't draw the root node
-      .map((d) => html`<path d=${mousearc(d)} onmouseenter=${e => onmouseenter(e, d)} onclick=${e => onclick(e, d)} />`)}
+      .map((d) => html`<path d=${mousearc(d)} onmouseleave=${onmouseleave} onmouseenter=${() => onmouseenter(d)} onclick=${() => onclick(d)} />`)}
     </g>
     <g class="area-labels">
       ${root
@@ -219,7 +224,7 @@ export default function Home() {
   return html`
 <div class="subpage">
   <div class="title-bar"><h1 class="title wordmark">PunkStrat</h1><h2 class="title wordmark-reverse">Wheel</h2></div>
-  <p><${Wheel} width="500" height="500" /></p>
+  <p><${Wheel} width="600" height="auto" /></p>
   <${LogoLinkHome}/>
 </div>
   `;
