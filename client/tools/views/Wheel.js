@@ -86,17 +86,34 @@ function Wheel({ width, height, }) {
     return root;
   }
 
-  const segments = [
-    // 8 areas (a, b, c, ...), each 10 levels deep, taking up 1 space within the circle
-    ['a-a-a-a-a-a-a-a-a-a', '1'],
-    ['b-b-b-b-b-b-b-b-b-b', '1'],
-    ['c-c-c-c-c-c-c-c-c-c', '1'],
-    ['d-d-d-d-d-d-d-d-d-d', '1'],
-    ['e-e-e-e-e-e-e-e-e-e', '1'],
-    ['f-f-f-f-f-f-f-f-f-f', '1'],
-    ['g-g-g-g-g-g-g-g-g-g', '1'],
-    ['h-h-h-h-h-h-h-h-h-h', '1']
-  ];
+  function generateArea(areaMeta) {
+    return areaMeta.map(({ label, depth = 10, weight = 1 }) => {
+      // TODO: Instead of duplicating the label and then taking it apart within `buildHierarchy`, refactor the code and avoid this inefficiency
+      const segmentLabel = [new Array(depth).fill(label).join('-')];
+      segmentLabel.push(weight);
+      return segmentLabel;
+    });
+  }
+
+  // 8 areas (a, b, c, ...), each 10 levels deep, taking up 1 space within the circle
+  const segments = (generateArea([{
+    label: 'Finances',
+  }, {
+    label: 'Personal Growth',
+  }, {
+    label: 'Health',
+  }, {
+    label: 'Family',
+  }, {
+    label: 'Love & Relationships',
+  }, {
+    label: 'Fun & Recreation',
+  }, {
+    label: 'Mind & Meaning',
+  }, {
+    label: 'Career',
+  },
+  ]));
 
   const data = buildHierarchy(segments);
   const root = partition(data);
@@ -141,6 +158,9 @@ function Wheel({ width, height, }) {
       .hover-areas {
         cursor: pointer;
       }
+      .area-labels textPath {
+        font-size: 0.8em;
+      }
     </style>
     <g class="segments">${root
       .descendants()
@@ -165,7 +185,7 @@ function Wheel({ width, height, }) {
       // We could calculate startOffset more accurately as described in the article.
       // However, for nown, 23.5% is sufficiently close to what we need.
       .map((d) => html`<text fill="#fff" dy=${d.endAngle > 90 * Math.PI / 180 ? 18 : -11}>
-        <textPath fill="#fff" startOffset="23.5%" text-anchor="middle" href="#${d.data.id}">${d.data.id}</textPath>
+        <textPath fill="#fff" startOffset="23.5%" text-anchor="middle" href="#${d.data.id}">${d.data.name}</textPath>
       </text>`)}
     </g>
   </svg>`;
