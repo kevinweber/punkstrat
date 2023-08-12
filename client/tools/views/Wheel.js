@@ -7,13 +7,57 @@ const html = htm.bind(h);
 
 const strokeWidth = 2;
 
+// TODO:
+// Store labels and ratings in URL.
+// When the page is loaded with them in URL, display those values on the page instead of the defaults.
+// This enables easy sharing of the output.
+function generateArea(areaMeta) {
+  return areaMeta.map(({ label, depth = 10, weight = 1 }) => {
+    // TODO: Instead of duplicating the label and then taking it apart within `buildHierarchy`, refactor the code and avoid this inefficiency
+    const segmentLabel = [new Array(depth).fill(label).join('-')];
+    segmentLabel.push(weight);
+    return segmentLabel;
+  });
+}
+
+// 8 areas (a, b, c, ...), each 10 levels deep, taking up 1 space within the circle
+const segments = (generateArea([{
+  label: 'Finances',
+}, {
+  label: 'Personal Growth',
+}, {
+  label: 'Health',
+}, {
+  label: 'Family',
+}, {
+  label: 'Love & Relationships',
+}, {
+  label: 'Fun & Recreation',
+}, {
+  label: 'Mind & Meaning',
+}, {
+  label: 'Career',
+},
+]));
+
 function Wheel({ width, height, }) {
   const [viewBox, setViewBox] = useState('0,0,0,0');
-  const [segementsActive, setSegmentsActive] = useState([]);
+  const [segmentsActive, setSegmentsActive] = useState([]);
+  const [segmentsSelected, setSegmentsSelected] = useState({});
 
   const svgRef = useRef(null);
   const segmentGap = 0;
   const radius = width / 2;
+
+  const getAutoBox = () => {
+    if (!svgRef.current) { return ''; }
+    const { x, y, width, height } = svgRef.current.getBBox();
+    return [x - strokeWidth / 2, y - strokeWidth / 2, width + strokeWidth, height + strokeWidth].toString();
+  };
+
+  useEffect(() => {
+    setViewBox(getAutoBox());
+  }, []);
 
   // https://gist.github.com/FrissAnalytics/2332b91857d2d9c0c1eb5e0ca62cb56b#formatting-the-data-d3
   const partition = (data) =>
@@ -86,48 +130,10 @@ function Wheel({ width, height, }) {
     return root;
   }
 
-  function generateArea(areaMeta) {
-    return areaMeta.map(({ label, depth = 10, weight = 1 }) => {
-      // TODO: Instead of duplicating the label and then taking it apart within `buildHierarchy`, refactor the code and avoid this inefficiency
-      const segmentLabel = [new Array(depth).fill(label).join('-')];
-      segmentLabel.push(weight);
-      return segmentLabel;
-    });
-  }
-
-  // 8 areas (a, b, c, ...), each 10 levels deep, taking up 1 space within the circle
-  const segments = (generateArea([{
-    label: 'Finances',
-  }, {
-    label: 'Personal Growth',
-  }, {
-    label: 'Health',
-  }, {
-    label: 'Family',
-  }, {
-    label: 'Love & Relationships',
-  }, {
-    label: 'Fun & Recreation',
-  }, {
-    label: 'Mind & Meaning',
-  }, {
-    label: 'Career',
-  },
-  ]));
-
   const data = buildHierarchy(segments);
   const root = partition(data);
 
-  const getAutoBox = () => {
-    if (!svgRef.current) { return ''; }
-    const { x, y, width, height } = svgRef.current.getBBox();
-    return [x - strokeWidth / 2, y - strokeWidth / 2, width + strokeWidth, height + strokeWidth].toString();
-  };
-
-  useEffect(() => {
-    setViewBox(getAutoBox());
-  }, []);
-
+  // TODO: When hoving a segment, display its rating
   function onmouseenter(e, d) {
     // Get the ancestors of the current segment, minus the root
     const sequence = d
@@ -137,6 +143,22 @@ function Wheel({ width, height, }) {
 
     const activeSegments = sequence.map(node => node.data.id);
     setSegmentsActive(activeSegments);
+  }
+
+  function onclick(e, d) {
+    // Get the ancestors of the current segment, minus the root
+    const sequence = d
+      .ancestors()
+      .reverse()
+      .slice(1);
+
+    const newSegmentsSelected = sequence.map(node => node.data.id);
+
+    // If selection in current area changes, make sure to unselect those that should be no longer selected
+    // Keep selection in other areas
+    const mergedSegmentsSelected = { ...segmentsSelected, [d.data.name]: newSegmentsSelected };
+
+    setSegmentsSelected(mergedSegmentsSelected);
   }
 
   return html`<svg width=${width} height=${height} viewBox=${viewBox} ref=${svgRef} style="max-width:100%; overflow:visible">
@@ -149,11 +171,11 @@ function Wheel({ width, height, }) {
       }
       .segments path.active {
         fill: var(--color-primary);
-        fill-opacity: 0.9;
+        fill-opacity: 0.8;
       }
       .segments path.selected {
         fill: var(--color-primary);
-        fill-opacity: 0.8;
+        fill-opacity: 0.9;
       }
       .hover-areas {
         cursor: pointer;
@@ -166,16 +188,17 @@ function Wheel({ width, height, }) {
       .descendants()
       .filter((d) => d.depth) // Don't draw the root node
       .map((d) => {
-        return (
-          html`<path id=${d.data.id} d=${arc(d)} class=${segementsActive.includes(d.data.id) ? 'active' : ''} />`
-        );
+        const classNames = [];
+        if (segmentsActive.includes(d.data.id)) { classNames.push('active'); }
+        if (segmentsSelected[d.data.name]?.includes(d.data.id)) { classNames.push('selected'); }
+        return html`<path id=${d.data.id} d=${arc(d)} class=${classNames.join(' ')} />`;
       })}
     </g>
     <g class="hover-areas" fill="none" pointer-events="all">
       ${root
       .descendants()
       .filter((d) => d.depth) // Don't draw the root node
-      .map((d) => html`<path d=${mousearc(d)} onmouseenter=${e => onmouseenter(e, d)} />`)}
+      .map((d) => html`<path d=${mousearc(d)} onmouseenter=${e => onmouseenter(e, d)} onclick=${e => onclick(e, d)} />`)}
     </g>
     <g class="area-labels">
       ${root
