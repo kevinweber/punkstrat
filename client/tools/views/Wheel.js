@@ -182,10 +182,11 @@ function Wheel({ width, height, }) {
       .descendants()
       .filter((d) => d.depth === 10) // Only draw label for outermost segment
       // Placing text on arcs: https://www.visualcinnamon.com/2015/09/placing-text-on-arcs/
-      // We could calculate startOffset more accurately as described in the article.
-      // However, for nown, 23.5% is sufficiently close to what we need.
-      .map((d) => html`<text fill="#fff" dy=${d.endAngle > 90 * Math.PI / 180 ? 18 : -11}>
-        <textPath fill="#fff" startOffset="23.5%" text-anchor="middle" href="#${d.data.id}">${d.data.name}</textPath>
+      // TODO: Calculate startOffset more accurately as described in the article.
+      // For nown, 23.5% is sufficiently close to what we need. This will need to be revisited if we derive from the standard 8 areas with equal weight (1) configuration.
+      // TODO: Flip labels on the bottom half of the chart to not be on their head anymore.
+      .map((d) => html`<text fill="#fff" dy=${-12}>
+        <textPath fill="#fff" startOffset="23.2%" text-anchor="middle" href="#${d.data.id}">${d.data.name}</textPath>
       </text>`)}
     </g>
   </svg>`;
