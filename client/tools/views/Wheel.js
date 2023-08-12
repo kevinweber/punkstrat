@@ -99,8 +99,6 @@ function Wheel({ width, height, }) {
   ];
 
   const data = buildHierarchy(segments);
-  console.log('data', data);
-
   const root = partition(data);
 
   const getAutoBox = () => {
@@ -124,7 +122,7 @@ function Wheel({ width, height, }) {
     setSegmentsActive(activeSegments);
   }
 
-  return html`<svg width=${width} height=${height} viewBox=${viewBox} ref=${svgRef} style="max-width:100%">
+  return html`<svg width=${width} height=${height} viewBox=${viewBox} ref=${svgRef} style="max-width:100%; overflow:visible">
     <style>
       .segments path {
         stroke-width: ${strokeWidth};
@@ -149,7 +147,7 @@ function Wheel({ width, height, }) {
       .filter((d) => d.depth) // Don't draw the root node
       .map((d) => {
         return (
-          html`<path key=${d.data.id} d=${arc(d)} class=${segementsActive.includes(d.data.id) ? 'active' : ''} />`
+          html`<path id=${d.data.id} d=${arc(d)} class=${segementsActive.includes(d.data.id) ? 'active' : ''} />`
         );
       })}
     </g>
@@ -157,7 +155,18 @@ function Wheel({ width, height, }) {
       ${root
       .descendants()
       .filter((d) => d.depth) // Don't draw the root node
-      .map((d) => html`<path key=${d.data.id} d=${mousearc(d)} onmouseenter=${e => onmouseenter(e, d)} />`)}
+      .map((d) => html`<path d=${mousearc(d)} onmouseenter=${e => onmouseenter(e, d)} />`)}
+    </g>
+    <g class="area-labels">
+      ${root
+      .descendants()
+      .filter((d) => d.depth === 10) // Only draw label for outermost segment
+      // Placing text on arcs: https://www.visualcinnamon.com/2015/09/placing-text-on-arcs/
+      // We could calculate startOffset more accurately as described in the article.
+      // However, for nown, 23.5% is sufficiently close to what we need.
+      .map((d) => html`<text fill="#fff" dy=${d.endAngle > 90 * Math.PI / 180 ? 18 : -11}>
+        <textPath fill="#fff" startOffset="23.5%" text-anchor="middle" href="#${d.data.id}">${d.data.id}</textPath>
+      </text>`)}
     </g>
   </svg>`;
 }
