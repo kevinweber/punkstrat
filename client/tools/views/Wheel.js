@@ -13,10 +13,8 @@ const strokeWidth = 2;
 // This enables easy sharing of the output.
 function generateArea(areaMeta) {
   return areaMeta.map(({ label, depth = 10, weight = 1 }) => {
-    // TODO: Instead of duplicating the label and then taking it apart within `buildHierarchy`, refactor the code and avoid this inefficiency
-    const segmentLabel = [new Array(depth).fill(label).join('-')];
-    segmentLabel.push(weight);
-    return segmentLabel;
+    // TODO: Refactor `buildHierarchy` to avoid duplicating the label and then taking it apart again
+    return [new Array(depth).fill(label).join('-'), weight];
   });
 }
 
@@ -73,7 +71,6 @@ function Wheel({ width, height, }) {
     .startAngle(d => d.x0)
     .endAngle(d => d.x1)
     // Spacing between areas
-    // .padAngle(1 / radius)
     .padAngle(segmentGap / radius)
     .padRadius(radius)
     // Segment gap = spacing between segments (slides) within an area
@@ -88,26 +85,26 @@ function Wheel({ width, height, }) {
     .outerRadius(radius);
 
   function buildHierarchy(csv) {
-    // Helper function that transforms the given CSV-compatible data into a hierarchical format.
+    // Helper function that transforms the given CSV-compatible data into a hierarchical format
     const root = { name: 'root', id: 'root', children: [] };
     for (let i = 0; i < csv.length; i++) {
       const sequence = csv[i][0];
       const size = +csv[i][1];
       if (isNaN(size)) {
-        // e.g. if this is a header row
+        // E.g. if this is a header row
         continue;
       }
       const parts = sequence.split('-');
       let currentNode = root;
       for (let j = 0; j < parts.length; j++) {
-        const children = currentNode['children'];
+        const children = currentNode.children;
         const nodeName = parts[j];
         let childNode = null;
         if (j + 1 < parts.length) {
-          // Not yet at the end of the sequence; move down the tree.
+          // Not yet at the end of the sequence; move down the tree
           let foundChild = false;
           for (let k = 0; k < children.length; k++) {
-            if (children[k]['name'] == nodeName) {
+            if (children[k]['name'] === nodeName) {
               childNode = children[k];
               foundChild = true;
               break;
@@ -224,7 +221,7 @@ export default function Home() {
   return html`
 <div class="subpage">
   <div class="title-bar"><h1 class="title wordmark">PunkStrat</h1><h2 class="title wordmark-reverse">Wheel</h2></div>
-  <p><${Wheel} width="600" height="auto" /></p>
+  <p><${Wheel} width="600" height="600" /></p>
   <${LogoLinkHome}/>
 </div>
   `;
