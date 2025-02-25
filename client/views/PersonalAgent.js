@@ -1,5 +1,4 @@
-import { h } from '../libs/preact.js';
-import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
+import { h, useEffect, useRef, useState } from '../libs/preact.js';
 import htm from '../libs/htm.js';
 import LogoLinkHome from '../components/LogoLinkHome.js';
 
