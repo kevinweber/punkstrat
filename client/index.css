@@ -176,10 +176,8 @@ img {
 .conversation-box {
   display: flex;
   flex-direction: column;
-  height: 400px;
   border: 1px solid var(--color-primary);
   border-radius: 8px;
-  overflow: hidden;
   background-color: var(--color-darker);
   margin: 20px 0;
 }
@@ -301,6 +299,66 @@ img {
   cursor: not-allowed;
 }
 
+.file-upload-container {
+  margin: 15px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.upload-button {
+  padding: 8px 20px;
+  background-color: var(--color-dark);
+  color: white;
+  border: 1px solid var(--color-primary);
+  border-radius: 20px;
+  cursor: pointer;
+  font-weight: bold;
+  transition: background-color 0.3s;
+}
+
+.upload-button:hover {
+  background-color: #2a2a2a;
+}
+
+.upload-button:disabled {
+  background-color: #555;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.uploaded-pdfs {
+  margin-top: 15px;
+  width: 100%;
+  max-width: 600px;
+  background-color: var(--color-dark);
+  border: 1px solid var(--color-primary);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.uploaded-pdfs p {
+  font-weight: bold;
+  padding-top: 0;
+  margin-bottom: 5px;
+}
+
+.uploaded-pdfs ul {
+  list-style-type: none;
+  margin: 0;
+  padding: 0;
+}
+
+.uploaded-pdfs li {
+  font-size: 0.8rem;
+  padding: 5px 0;
+  border-bottom: 1px solid #333;
+}
+
+.uploaded-pdfs li:last-child {
+  border-bottom: none;
+}
+
 .footer-note {
   font-size: 0.75rem;
   color: #aaa;
@@ -317,4 +375,31 @@ img {
 .agent-footer {
   /* These classes are no longer used */
   display: none;
+}
+
+.model-selector {
+  display: flex;
+  align-items: center;
+  margin-bottom: 10px;
+  color: var(--text-color);
+}
+
+.model-selector label {
+  margin-right: 10px;
+  font-weight: bold;
+}
+
+.model-selector select {
+  padding: 5px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--border-color);
+  background-color: var(--input-bg);
+  color: var(--text-color);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.model-selector select:focus {
+  outline: none;
+  border-color: var(--accent-color);
 }
