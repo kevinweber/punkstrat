@@ -66,14 +66,14 @@ const loadPdfJs = async () => {
 
 export default function PersonalAgent() {
   // State hooks
-  const [input, setInput] = useState('');
   const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [loadingTime, setLoadingTime] = useState(0);
-  const [aiStatus, setAiStatus] = useState({ isConfigured: false });
+  const [availableModels, setAvailableModels] = useState([]);
+  const [selectedModel, setSelectedModel] = useState('gemini-1.5-pro');
   const [uploadedPdfs, setUploadedPdfs] = useState([]);
-  const [isUploading, setIsUploading] = useState(false);
-  const [selectedModel, setSelectedModel] = useState('gemini-2.0-flash');
+  const [isPdfUploading, setIsPdfUploading] = useState(false);
+  const [loadingTime, setLoadingTime] = useState(0);
   const [dragActive, setDragActive] = useState(false);
 
   // Refs
@@ -133,16 +133,50 @@ export default function PersonalAgent() {
     };
   }, [isLoading]);
 
-  // Check AI API status
+  // Initialize AI service and load settings
   const checkAiStatus = async () => {
     try {
-      const response = await fetch(STATUS_ENDPOINT);
-      if (response.ok) {
-        const data = await response.json();
-        setAiStatus(data.status);
+      const response = await fetch('/api/ai/status');
+      if (!response.ok) {
+        throw new Error(`Failed to check AI status: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      console.log('AI status check response:', data);
+      
+      if (data.success && data.status && data.status.isConfigured) {
+        console.log('AI service is ready');
+        
+        // Set available models
+        if (data.status.supportedModels && data.status.supportedModels.length > 0) {
+          setAvailableModels(data.status.supportedModels);
+          // Use the default model or first available
+          setSelectedModel(data.status.defaultModel || data.status.supportedModels[0] || 'gemini-1.5-pro');
+        } else {
+          // No models available, set default
+          console.log('No models available from API, using default model');
+          setAvailableModels(['gemini-1.5-pro']);
+          setSelectedModel('gemini-1.5-pro');
+        }
+      } else {
+        console.warn('AI service is not configured properly');
+        // Set default models even if service isn't configured
+        setAvailableModels(['gemini-1.5-pro']);
+        setSelectedModel('gemini-1.5-pro');
+        
+        setMessages(prev => [
+          ...prev,
+          {
+            role: 'system',
+            content: 'The AI service is not configured properly. Please check your server logs.'
+          }
+        ]);
       }
     } catch (error) {
       console.error('Error checking AI status:', error);
+      // Set default models even on error
+      setAvailableModels(['gemini-1.5-pro']);
+      setSelectedModel('gemini-1.5-pro');
     }
   };
 
@@ -266,7 +300,7 @@ export default function PersonalAgent() {
   const handlePdfUpload = async (files) => {
     if (files.length === 0) return;
     
-    setIsUploading(true);
+    setIsPdfUploading(true);
     setMessages(prev => [
       ...prev,
       {
@@ -346,7 +380,7 @@ export default function PersonalAgent() {
         }
       ]);
     } finally {
-      setIsUploading(false);
+      setIsPdfUploading(false);
     }
   };
 
@@ -431,51 +465,149 @@ export default function PersonalAgent() {
         systemPromptAdditions = '\n\nYou are analyzing documents. This is critical for the user. Provide COMPLETE, thorough analysis without stopping mid-analysis. Include key information from the documents and organize your response with clear headings and bullet points.';
       }
       
-      // Send request to AI with increased timeout
-      const response = await fetch('/api/ai/chat', {
+      // Create an empty assistant message to start the streaming response
+      const assistantMessageId = `msg-${Date.now()}`;
+      setMessages(prev => [
+        ...prev,
+        {
+          id: assistantMessageId,
+          role: 'assistant',
+          content: '',
+          isStreaming: true
+        }
+      ]);
+      
+      // Initialize SSE connection
+      const eventSource = new EventSource(`/api/ai/chat?userId=${encodeURIComponent(USER_ID)}`);
+      
+      // Prepare request data
+      const requestData = {
+        message: input,
+        userId: USER_ID,
+        model: selectedModel,
+        context: conversationHistory.current,
+        documents: documentContext,
+        streaming: true,
+        systemPrompt: `You are a helpful and knowledgeable AI assistant. ${personalInfo.length > 0 ? 'Important information about the user: ' + personalInfo.join('. ') : ''}${systemPromptAdditions}`
+      };
+      
+      // Send request to start streaming
+      fetch('/api/ai/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          message: input,
-          userId: USER_ID,
-          model: selectedModel,
-          context: conversationHistory.current,
-          documents: documentContext,
-          systemPrompt: `You are a helpful and knowledgeable AI assistant. ${personalInfo.length > 0 ? 'Important information about the user: ' + personalInfo.join('. ') : ''}${systemPromptAdditions}`
-        }),
+        body: JSON.stringify(requestData),
         signal: controller.signal
+      }).catch(error => {
+        // Handle fetch errors (like network issues or aborted requests)
+        eventSource.close();
+        clearTimeout(timeoutId);
+        throw error;
       });
       
-      clearTimeout(timeoutId);
+      // Keep track of the accumulated response
+      let fullResponse = '';
       
-      if (!response.ok) {
-        throw new Error(`AI API error: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      
-      // Create assistant message
-      const assistantMessage = {
-        role: 'assistant',
-        content: data.response
+      // Setup event handlers for SSE
+      eventSource.onopen = () => {
+        console.log('SSE connection established');
       };
       
-      // Update UI with assistant message
-      setMessages(prev => [...prev, assistantMessage]);
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          
+          switch(data.event) {
+            case 'start':
+              console.log('AI response started');
+              break;
+              
+            case 'chunk':
+              // Append new chunk to the full response
+              fullResponse += data.chunk;
+              
+              // Update the streaming message with the current accumulated text
+              setMessages(prev => 
+                prev.map(msg => 
+                  msg.id === assistantMessageId 
+                    ? { ...msg, content: fullResponse } 
+                    : msg
+                )
+              );
+              break;
+              
+            case 'complete':
+              // Final response received, update the message and mark as complete
+              const finalResponse = data.response;
+              
+              // Create the final assistant message
+              const assistantMessage = {
+                role: 'assistant',
+                content: finalResponse
+              };
+              
+              // Replace the streaming message with the complete one
+              setMessages(prev => 
+                prev.map(msg => 
+                  msg.id === assistantMessageId
+                    ? { ...assistantMessage, isStreaming: false }
+                    : msg
+                )
+              );
+              
+              // Update conversation history
+              conversationHistory.current = [
+                ...conversationHistory.current,
+                assistantMessage
+              ];
+              
+              // Clean up
+              eventSource.close();
+              clearTimeout(timeoutId);
+              
+              // Save to memory
+              saveToMemory(input, 'user');
+              saveToMemory(finalResponse, 'assistant');
+              break;
+              
+            case 'error':
+              // Handle error in the stream
+              throw new Error(data.error);
+              
+            case 'fallback-start':
+              console.log(`Switching to fallback model: ${data.model}`);
+              break;
+          }
+        } catch (err) {
+          console.error('Error processing SSE event:', err);
+          eventSource.close();
+          clearTimeout(timeoutId);
+          throw err;
+        }
+      };
       
-      // Update conversation history
-      conversationHistory.current = [...conversationHistory.current, assistantMessage];
-      
-      // Save messages to memory for future retrieval
-      try {
-        await saveToMemory(input, 'user');
-        await saveToMemory(data.response, 'assistant');
-      } catch (memoryError) {
-        console.error('Error saving to memory:', memoryError);
-        // Continue even if saving to memory fails
-      }
+      eventSource.onerror = (error) => {
+        console.error('SSE Error:', error);
+        eventSource.close();
+        clearTimeout(timeoutId);
+        
+        // Update the message to indicate error
+        setMessages(prev => 
+          prev.map(msg => 
+            msg.id === assistantMessageId
+              ? { 
+                  ...msg, 
+                  role: 'system',
+                  content: 'Error: Connection to AI service failed. Please try again.',
+                  isStreaming: false 
+                }
+              : msg
+          )
+        );
+        
+        setIsLoading(false);
+      };
     } catch (error) {
       console.error('Error sending message:', error);
       
@@ -494,7 +626,7 @@ export default function PersonalAgent() {
           content: `Error: ${errorMessage}. Please try again.`
         }
       ]);
-    } finally {
+      
       setIsLoading(false);
     }
   };
@@ -699,8 +831,8 @@ export default function PersonalAgent() {
       <h1 class="title">Personal AI Agent</h1>
       <p>
         <span class="highlight">
-          ${aiStatus.isConfigured
-      ? `Powered by ${aiStatus.service}`
+          ${availableModels.length > 0
+      ? `Powered by ${selectedModel} with ${availableModels.length} models available`
       : 'AI API not configured - Add your GOOGLE_AI_API_KEY to .env'}
         </span>
       </p>
@@ -713,9 +845,9 @@ export default function PersonalAgent() {
             value=${selectedModel} 
             onChange=${e => setSelectedModel(e.target.value)}
           >
-            <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
-            <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
-            <option value="gemini-2.0-flash">Gemini 2.0 Flash Light</option>
+            ${availableModels.map(model => html`
+              <option value=${model}>${model}</option>
+            `)}
           </select>
         </div>
         
@@ -784,9 +916,9 @@ export default function PersonalAgent() {
         <button 
           class="upload-button" 
           onClick=${handleUploadClick}
-          disabled=${isUploading}
+          disabled=${isPdfUploading}
         >
-          ${isUploading ? 'Processing...' : 'Upload PDF'}
+          ${isPdfUploading ? 'Processing...' : 'Upload PDF'}
         </button>
         ${uploadedPdfs.length > 0 && html`
           <div class="uploaded-pdfs">
