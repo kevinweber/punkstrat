@@ -12,7 +12,7 @@
 The site includes a simple personal AI agent demo page:
 
 * The agent uses an in-memory storage solution to maintain conversation history
-* The current implementation generates random responses from a predefined set
+* The implementation uses pattern matching to provide relevant responses to common queries
 * The application maintains a consistent design language with the main site
 * To integrate with a real AI service, update the `processMessage` function in `client/views/PersonalAgent.js`
 
@@ -20,6 +20,88 @@ The personal agent can be accessed at `/personal-agent` and supports:
 * Text conversations
 * PDF document uploads (for potential knowledge base integration)
 * Message history stored during the server session
+
+### Connecting to an External AI API
+
+The current implementation uses pattern matching for responses, but you can easily integrate with an external AI API:
+
+1. **OpenAI Integration**:
+   ```javascript
+   // In client/views/PersonalAgent.js
+   const processMessage = async (userMessage) => {
+     try {
+       const response = await fetch('/api/ai', {
+         method: 'POST',
+         headers: {
+           'Content-Type': 'application/json'
+         },
+         body: JSON.stringify({
+           message: userMessage,
+           userId: USER_ID
+         })
+       });
+       
+       if (!response.ok) throw new Error('AI service error');
+       const data = await response.json();
+       return data.response;
+     } catch (error) {
+       console.error('Error calling AI service:', error);
+       return "I'm having trouble connecting to my AI service. Please try again later.";
+     }
+   };
+   ```
+
+2. **Server-side Implementation**:
+   ```javascript
+   // In a new file: server/ai-integration.js
+   const express = require('express');
+   const router = express.Router();
+   const { Configuration, OpenAIApi } = require("openai");
+   
+   const configuration = new Configuration({
+     apiKey: process.env.OPENAI_API_KEY,
+   });
+   const openai = new OpenAIApi(configuration);
+   
+   router.post('/ai', async (req, res) => {
+     try {
+       const { message, userId } = req.body;
+       
+       const completion = await openai.createChatCompletion({
+         model: "gpt-3.5-turbo",
+         messages: [
+           { role: "system", content: "You are a helpful personal assistant for the PunkStrat website." },
+           { role: "user", content: message }
+         ]
+       });
+       
+       res.json({ response: completion.data.choices[0].message.content });
+     } catch (error) {
+       console.error('OpenAI API error:', error);
+       res.status(500).json({ error: 'Failed to get AI response' });
+     }
+   });
+   
+   module.exports = router;
+   ```
+
+3. **Add the route to app.js**:
+   ```javascript
+   // In server/app.js
+   const aiIntegration = require('./ai-integration');
+   // ...
+   app.use('/api/ai', aiIntegration);
+   ```
+
+4. **Install the OpenAI SDK**:
+   ```
+   npm install openai
+   ```
+
+5. **Add your API key to .env**:
+   ```
+   OPENAI_API_KEY=your_api_key_here
+   ```
 
 ## Dev notes
 

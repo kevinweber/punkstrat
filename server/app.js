@@ -7,6 +7,7 @@ const path = require('path');
 const fs = require('fs');
 const app = express();
 const zepIntegration = require('./zep-integration');
+const aiIntegration = require('./ai-integration');
 
 // FYI: `npx kill-port 8000`
 const PORT = process.env.PORT || 8000;
@@ -19,6 +20,7 @@ app.use(express.json()); // For parsing application/json
 
 // API routes
 app.use('/api/zep', zepIntegration);
+app.use('/api/ai', aiIntegration);
 
 // CORS headers for development
 if (IS_DEV) {
