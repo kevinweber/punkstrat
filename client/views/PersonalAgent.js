@@ -125,78 +125,98 @@ export default function PersonalAgent() {
   // Load conversation history from Zep memory
   const loadHistory = async () => {
     try {
-      // Welcome message
-      const welcomeMessage = { 
-        role: 'system', 
-        content: 'Welcome to your personal AI assistant powered by Google Gemini. I can help answer questions and have conversations with you.' 
-      };
+      // Fetch conversation history from Zep memory
+      const response = await fetch(`/api/zep/memory?userId=${USER_ID}&source=conversation`);
       
-      // Try to fetch recent conversation history
-      try {
-        const response = await fetch(`${API_BASE_URL}/memory?userId=${USER_ID}&limit=10&source=conversation`);
-        if (response.ok) {
-          const data = await response.json();
-          
-          if (data.results && data.results.length > 0) {
-            // Sort by timestamp (oldest first)
-            const sortedResults = data.results
-              .filter(item => item.metadata && item.metadata.timestamp)
-              .sort((a, b) => new Date(a.metadata.timestamp) - new Date(b.metadata.timestamp));
-            
-            // Recreate conversation from memory
-            const historyMessages = sortedResults.map(item => ({
-              role: item.metadata.role || 'user',
-              content: item.content
-            }));
-            
-            // Add welcome message at the beginning if not empty
-            setMessages([welcomeMessage, ...historyMessages]);
-            
-            // Also update the conversation history ref
-            conversationHistory.current = historyMessages;
-            
-            console.log(`Loaded ${historyMessages.length} messages from memory`);
-            return;
-          }
-        }
-      } catch (error) {
-        console.warn('Error loading history from memory:', error);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch memory: ${response.status}`);
       }
       
-      // Fallback to just welcome message if no history or error
-      setMessages([welcomeMessage]);
+      const data = await response.json();
+      
+      if (data && data.results && data.results.length > 0) {
+        // Sort results by timestamp if available
+        const sortedResults = [...data.results].sort((a, b) => {
+          const timeA = a.metadata?.timestamp || '0';
+          const timeB = b.metadata?.timestamp || '0';
+          return new Date(timeA) - new Date(timeB);
+        });
+        
+        // Extract messages from results
+        const historyMessages = sortedResults.map(item => ({
+          role: item.metadata?.role || 'system',
+          content: item.content
+        }));
+        
+        // Update conversation history
+        conversationHistory.current = historyMessages;
+        
+        // Set messages state with welcome message and loaded history
+        setMessages([
+          { 
+            role: 'system', 
+            content: 'Welcome to your Personal AI Agent! Ask me anything or upload documents for me to analyze.' 
+          },
+          ...historyMessages
+        ]);
+      } else {
+        // If no history found, just show welcome message
+        setMessages([
+          { 
+            role: 'system', 
+            content: 'Welcome to your Personal AI Agent! Ask me anything or upload documents for me to analyze.' 
+          }
+        ]);
+      }
     } catch (error) {
       console.error('Error loading history:', error);
-      setMessages([{ 
-        role: 'system', 
-        content: 'Welcome to your personal AI assistant. I can help answer questions and have conversations with you.' 
-      }]);
+      
+      // Show welcome message even if error occurs
+      setMessages([
+        { 
+          role: 'system', 
+          content: 'Welcome to your Personal AI Agent! Ask me anything or upload documents for me to analyze.' 
+        }
+      ]);
     }
   };
 
   // Load previously uploaded PDFs
   const loadUploadedPdfs = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/pdfs?userId=${USER_ID}`);
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success && data.pdfs && data.pdfs.length > 0) {
-          setUploadedPdfs(data.pdfs);
-          
-          // Add a system message about available PDFs if any exist
-          if (data.pdfs.length > 0) {
-            setMessages(prev => [
-              ...prev, 
-              { 
-                role: 'system', 
-                content: `You have ${data.pdfs.length} previously uploaded PDF document${data.pdfs.length > 1 ? 's' : ''} available. You can ask questions about the content.` 
-              }
-            ]);
-          }
+      const response = await fetch(`/api/zep/documents?userId=${USER_ID}`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch documents: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      if (data && data.documents) {
+        setUploadedPdfs(data.documents.map(doc => ({
+          name: doc.name,
+          chunks: doc.chunk_count || 0,
+          pages: doc.metadata?.pages || '?'
+        })));
+        
+        // If there are documents, inform the user about them
+        if (data.documents.length > 0) {
+          const docNames = data.documents.map(doc => doc.name).join(', ');
+          setMessages(prev => {
+            // Check if we already have this message to avoid duplication
+            if (!prev.some(m => m.role === 'system' && m.content.includes('Available PDFs:'))) {
+              return [
+                ...prev,
+                {
+                  role: 'system',
+                  content: `Available PDFs: ${docNames}. You can ask questions about these documents.`
+                }
+              ];
+            }
+            return prev;
+          });
         }
       }
     } catch (error) {
-      console.error('Error loading PDF list:', error);
+      console.error('Error loading uploaded PDFs:', error);
     }
   };
 
@@ -218,304 +238,212 @@ export default function PersonalAgent() {
     fileInputRef.current.click();
   };
 
-  // Process uploaded PDFs on the client side
-  const handleFileUpload = async (e) => {
-    const files = e.target.files;
-    if (!files || !files.length) return;
-
+  // Process and upload PDF files
+  const handlePdfUpload = async (files) => {
+    if (files.length === 0) return;
+    
     setIsUploading(true);
-
-    try {
-      const pdfjsLib = await loadPdfJs();
-
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        if (file.type !== 'application/pdf') {
-          alert('Only PDF files are supported.');
-          continue;
-        }
-
-        // Read file as array buffer
-        const arrayBuffer = await file.arrayBuffer();
-
-        // Load PDF document
-        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-
-        // Process each page
-        const chunks = [];
-        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-          const page = await pdf.getPage(pageNum);
-          const textContent = await page.getTextContent();
-          const pageText = textContent.items.map(item => item.str).join(' ');
-
-          // Split text into chunks
-          const chunkSize = 1000;
-          for (let j = 0; j < pageText.length; j += chunkSize) {
-            const chunk = pageText.slice(j, j + chunkSize);
-            if (chunk.trim()) {
-              chunks.push(chunk);
-            }
-          }
-        }
-
-        // Store chunks in Zep memory
-        for (let j = 0; j < chunks.length; j++) {
-          await saveToMemory(chunks[j], 'document', {
-            source: 'pdf',
-            filename: file.name,
-            chunkIndex: j,
-            totalChunks: chunks.length
-          });
-        }
-
-        // Add content to document context
-        documentContext.current.push(...chunks);
-
-        // Add to uploaded PDFs list
-        setUploadedPdfs(prev => [...prev, {
-          name: file.name,
-          timestamp: new Date().toISOString(),
-          pages: pdf.numPages,
-          chunks: chunks.length
-        }]);
-
-        // Add a system message to confirm upload
-        setMessages(prev => [...prev, {
-          role: 'system',
-          content: `Uploaded and processed "${file.name}" (${pdf.numPages} pages, ${chunks.length} chunks). You can now ask questions about this document.`
-        }]);
-      }
-    } catch (error) {
-      console.error('Error processing PDF:', error);
-      setMessages(prev => [...prev, {
+    setMessages(prev => [
+      ...prev,
+      {
         role: 'system',
-        content: `Error processing PDF: ${error.message}`
-      }]);
+        content: `Processing ${files.length} PDF file(s)...`
+      }
+    ]);
+    
+    const formData = new FormData();
+    files.forEach(file => {
+      formData.append('files', file);
+    });
+    formData.append('userId', USER_ID);
+    
+    try {
+      const response = await fetch('/api/zep/upload-pdf', {
+        method: 'POST',
+        body: formData
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Upload failed: ${response.status}`);
+      }
+      
+      const result = await response.json();
+      
+      // Update uploaded PDFs list
+      loadUploadedPdfs();
+      
+      // Inform user of successful upload
+      setMessages(prev => [
+        ...prev,
+        {
+          role: 'system',
+          content: `Successfully processed ${files.length} PDF file(s). You can now ask questions about these documents.`
+        }
+      ]);
+      
+      // Add system message about added content
+      const fileNames = Array.from(files).map(file => file.name).join(', ');
+      
+      // Add special message specifically for the AI to know about the PDFs
+      conversationHistory.current = [
+        ...conversationHistory.current,
+        {
+          role: 'system',
+          content: `The user has uploaded the following PDFs: ${fileNames}. Please refer to these documents by name when discussing their content.`
+        }
+      ];
+    } catch (error) {
+      console.error('Error uploading PDF:', error);
+      setMessages(prev => [
+        ...prev,
+        {
+          role: 'system',
+          content: `Error uploading PDF: ${error.message}`
+        }
+      ]);
     } finally {
       setIsUploading(false);
-      // Clear file input value to allow uploading the same file again
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
     }
   };
 
-  // Save message to memory
-  const saveToMemory = async (text, role = 'user', additionalMetadata = {}) => {
+  // Send message to AI
+  const sendMessage = async () => {
+    if (!input.trim() || isLoading) return;
+    
+    const userMessage = {
+      role: 'user',
+      content: input
+    };
+    
+    // Update UI with user message
+    setMessages(prev => [...prev, userMessage]);
+    setInput('');
+    setIsLoading(true);
+    
+    // Update conversation history
+    conversationHistory.current = [...conversationHistory.current, userMessage];
+    
     try {
-      const response = await fetch(MEMORY_ENDPOINT, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          userId: USER_ID,
-          text,
-          metadata: {
-            role,
-            timestamp: new Date().toISOString(),
-            isImportant: isImportant(text) || text.toLowerCase().includes('my name is') || text.toLowerCase().includes('i am called'), // Mark introduction and important messages as important
-            ...additionalMetadata
-          }
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to save to memory');
-      }
-    } catch (error) {
-      console.error('Error saving to memory:', error);
-      // Continue even if saving to memory fails
-    }
-  };
-
-  // Process message using Google AI API
-  const processMessage = async (userMessage) => {
-    try {
-      // We no longer limit the conversation history to 10 messages
-      // This ensures the AI has access to the full conversation context
-      
-      // First, search specifically for important personal information
-      let personalInfo = [];
+      // Get relevant document context for the query
+      let documentContext = [];
       try {
-        // Look for any messages where the user introduced themselves
-        const personalInfoResponse = await fetch(`${API_BASE_URL}/memory?userId=${USER_ID}&source=conversation`);
-        if (personalInfoResponse.ok) {
-          const data = await personalInfoResponse.json();
-          if (data.results && data.results.length > 0) {
-            // Filter for messages containing personal information
-            personalInfo = data.results
-              .filter(item => 
-                item.metadata?.isImportant === true || 
-                item.content.toLowerCase().includes('my name is') ||
-                item.content.toLowerCase().includes('i am called')
-              )
-              .map(item => {
-                const role = item.metadata?.role === 'user' ? 'User' : 'Assistant';
-                return `${role}: ${item.content}`;
-              });
-          }
-        }
-      } catch (error) {
-        console.warn('Failed to retrieve personal information:', error);
-      }
-      
-      // Search Zep memory for relevant context - increase retrieval limit for better recall
-      let relevantContext = [];
-      try {
-        // First get document context (PDF knowledge)
-        const docSearchResponse = await fetch(`${API_BASE_URL}/memory?userId=${USER_ID}&query=${encodeURIComponent(userMessage)}&limit=15&source=pdf`);
-        if (docSearchResponse.ok) {
-          const data = await docSearchResponse.json();
-          if (data.results && data.results.length > 0) {
-            // Add document source metadata to each item
-            relevantContext = data.results.map(item => {
-              const source = item.metadata?.filename ? `[Source: ${item.metadata.filename}]` : '';
-              return `${source} ${item.content}`;
+        const docResponse = await fetch(`/api/zep/documents/search?userId=${USER_ID}&query=${encodeURIComponent(input)}`);
+        if (docResponse.ok) {
+          const docData = await docResponse.json();
+          if (docData.success && docData.results && docData.results.length > 0) {
+            documentContext = docData.results.map(result => {
+              const docName = result.document.metadata?.name || 'Unknown document';
+              return `[${docName}]: ${result.content}`;
             });
           }
         }
-        
-        // Then get conversation memory context - increase limit for better recall
-        const convSearchResponse = await fetch(`${API_BASE_URL}/memory?userId=${USER_ID}&query=${encodeURIComponent(userMessage)}&limit=15&source=conversation`);
-        if (convSearchResponse.ok) {
-          const data = await convSearchResponse.json();
-          if (data.results && data.results.length > 0) {
-            // Add conversation context but prevent duplicates with current history
-            const existingContent = new Set(conversationHistory.current.map(msg => msg.content));
-            const uniqueConvContext = data.results
-              .filter(item => !existingContent.has(item.content))
-              .map(item => {
-                // Add role information if available
-                const role = item.metadata?.role ? `[${item.metadata.role}] ` : '';
-                return `${role}${item.content}`;
-              });
-            
-            // Add to relevant context if unique
-            if (uniqueConvContext.length > 0) {
-              relevantContext = [...relevantContext, ...uniqueConvContext];
-            }
-          }
-        }
-      } catch (error) {
-        console.warn('Failed to search memory for context:', error);
+      } catch (docError) {
+        console.error('Error retrieving document context:', docError);
+        // Continue even if document context retrieval fails
       }
       
-      // Prepare history in the format expected by the AI - include all history
+      // Find any important personal information in the history
+      const personalInfo = conversationHistory.current
+        .filter(msg => msg.role === 'user' && isImportant(msg))
+        .map(msg => msg.content);
+      
+      // Prepare history in the format expected by the AI
       const formattedHistory = conversationHistory.current.map(msg => ({
-        role: msg.role === 'user' ? 'user' : 'assistant',
+        role: msg.role,
         parts: [{ text: msg.content }]
       }));
       
-      // Enhance context management with metadata
-      const contextInfo = relevantContext.length > 0 
-        ? `\n\nKnowledge context: ${relevantContext.length} relevant items found` 
-        : '';
-      
-      // Create a more informative system message about available context
-      const enhancedSystemPrompt = `You are an advanced, candid AI assistant for the PunkStrat website.
-You have access to user conversation history and any uploaded document context.
-Your goal is to provide accurate, direct information without unnecessary politeness or repetition.
-When referencing documents, be specific about their content and mention them by name.
-${personalInfo.length > 0 ? 'IMPORTANT USER INFORMATION:\n' + personalInfo.join('\n') + '\n\n' : ''}
-${relevantContext.length > 0 ? `IMPORTANT: The following documents are available for reference. When answering questions about them, cite them by name and provide specific details from their content:${contextInfo}` : ''}
-You can handle any request, including creative writing or technical questions, but always prioritize truth and clarity over being nice.`;
-      
-      const response = await fetch(`${AI_API_URL}/chat`, {
+      // Send request to AI
+      const response = await fetch('/api/ai/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          message: userMessage,
+          message: input,
           userId: USER_ID,
+          model: selectedModel,
           context: formattedHistory,
-          documents: relevantContext,
-          modelName: selectedModel,
-          systemPrompt: enhancedSystemPrompt
+          documents: documentContext,
+          systemPrompt: `You are a helpful and knowledgeable AI assistant. ${personalInfo.length > 0 ? 'Important information about the user: ' + personalInfo.join('. ') : ''}`
         })
       });
       
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.details || 'AI service error');
+        throw new Error(`AI API error: ${response.status}`);
       }
       
       const data = await response.json();
-      return data.response;
-    } catch (error) {
-      console.error('Error calling AI service:', error);
-      return aiStatus.isConfigured
-        ? 'I\'m having trouble connecting to my AI service. Please try again later.'
-        : 'AI service is not configured. Please add your GOOGLE_AI_API_KEY to the .env file.';
-    }
-  };
-
-  // Send a message
-  const sendMessage = async () => {
-    if (!input.trim()) return;
-
-    // Add user message to state and history
-    const userMessage = { role: 'user', content: input };
-    setMessages(prevMessages => [...prevMessages, userMessage]);
-    conversationHistory.current.push(userMessage);
-    setInput('');
-    setIsLoading(true);
-
-    try {
-      // Save user message to memory
-      await saveToMemory(input);
-
-      // Process the message and generate a response
-      const responseText = await processMessage(input);
-
-      // Add assistant response to state and history
-      const assistantMessage = { role: 'assistant', content: responseText };
-      setMessages(prevMessages => [...prevMessages, assistantMessage]);
-      conversationHistory.current.push(assistantMessage);
-
-      // Save assistant response to memory
-      await saveToMemory(responseText, 'assistant');
-    } catch (error) {
-      console.error('Error processing message:', error);
-      setMessages(prevMessages => [...prevMessages, {
-        role: 'assistant',
-        content: 'Sorry, I encountered an error processing your message.'
-      }]);
-    }
-
-    setIsLoading(false);
-  };
-
-  // Delete a PDF and its chunks from memory
-  const handleDeletePdf = async (filename) => {
-    if (!window.confirm(`Are you sure you want to delete "${filename}"? This cannot be undone.`)) {
-      return;
-    }
-    
-    try {
-      const response = await fetch(`${API_BASE_URL}/pdfs/${encodeURIComponent(filename)}?userId=${USER_ID}`, {
-        method: 'DELETE'
-      });
       
-      if (response.ok) {
-        // Remove from the list of uploaded PDFs
-        setUploadedPdfs(prev => prev.filter(pdf => pdf.name !== filename));
-        
-        // Notify the user
-        setMessages(prev => [...prev, {
-          role: 'system',
-          content: `Deleted "${filename}" from memory.`
-        }]);
-      } else {
-        throw new Error('Failed to delete PDF');
-      }
+      // Create assistant message
+      const assistantMessage = {
+        role: 'assistant',
+        content: data.response
+      };
+      
+      // Update UI with assistant message
+      setMessages(prev => [...prev, assistantMessage]);
+      
+      // Update conversation history
+      conversationHistory.current = [...conversationHistory.current, assistantMessage];
     } catch (error) {
-      console.error('Error deleting PDF:', error);
-      setMessages(prev => [...prev, {
-        role: 'system',
-        content: `Error deleting PDF: ${error.message}`
-      }]);
+      console.error('Error sending message:', error);
+      
+      // Show error message
+      setMessages(prev => [
+        ...prev,
+        {
+          role: 'system',
+          content: `Error: ${error.message}. Please try again.`
+        }
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Delete a PDF document
+  const handleDeletePdf = async (filename) => {
+    if (window.confirm(`Are you sure you want to delete "${filename}"?`)) {
+      try {
+        const response = await fetch(`/api/zep/pdfs/${encodeURIComponent(filename)}?userId=${USER_ID}`, {
+          method: 'DELETE'
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Failed to delete document: ${response.status}`);
+        }
+        
+        // Update the UI to reflect the deletion
+        setUploadedPdfs(prev => prev.filter(pdf => (pdf.name || pdf.filename) !== filename));
+        
+        // Add a system message about the deletion
+        setMessages(prev => [
+          ...prev,
+          {
+            role: 'system',
+            content: `Document "${filename}" has been deleted. It is no longer available for reference.`
+          }
+        ]);
+        
+        // Update conversation history about the deletion
+        conversationHistory.current = [
+          ...conversationHistory.current,
+          {
+            role: 'system',
+            content: `The user has deleted the PDF document: ${filename}. This document is no longer available for reference.`
+          }
+        ];
+      } catch (error) {
+        console.error('Error deleting PDF:', error);
+        setMessages(prev => [
+          ...prev,
+          {
+            role: 'system',
+            content: `Error deleting PDF: ${error.message}`
+          }
+        ]);
+      }
     }
   };
 
@@ -553,19 +481,25 @@ You can handle any request, including creative writing or technical questions, b
     const handleDragOver = (e) => {
       e.preventDefault();
       e.stopPropagation();
-      container.classList.add('drag-over');
+      container.classList.add('drag-active');
+      setDragActive(true);
     };
 
     const handleDragLeave = (e) => {
       e.preventDefault();
       e.stopPropagation();
-      container.classList.remove('drag-over');
+      // Only remove the class if we're leaving the container (not entering a child)
+      if (!e.currentTarget.contains(e.relatedTarget)) {
+        container.classList.remove('drag-active');
+        setDragActive(false);
+      }
     };
 
     const handleDrop = (e) => {
       e.preventDefault();
       e.stopPropagation();
-      container.classList.remove('drag-over');
+      container.classList.remove('drag-active');
+      setDragActive(false);
 
       if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
         // Process the dropped files
@@ -573,6 +507,15 @@ You can handle any request, including creative writing or technical questions, b
       }
     };
 
+    // Add dragenter event to show the indicator right away
+    const handleDragEnter = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      container.classList.add('drag-active');
+      setDragActive(true);
+    };
+
+    container.addEventListener('dragenter', handleDragEnter);
     container.addEventListener('dragover', handleDragOver);
     container.addEventListener('dragleave', handleDragLeave);
     container.addEventListener('drop', handleDrop);
@@ -580,6 +523,7 @@ You can handle any request, including creative writing or technical questions, b
     // Store event listeners in window for cleanup
     window._dragDropListeners = {
       container,
+      handleDragEnter,
       handleDragOver,
       handleDragLeave,
       handleDrop
@@ -589,7 +533,8 @@ You can handle any request, including creative writing or technical questions, b
   // Cleanup drag-and-drop event listeners
   const cleanupDragAndDrop = () => {
     if (window._dragDropListeners) {
-      const { container, handleDragOver, handleDragLeave, handleDrop } = window._dragDropListeners;
+      const { container, handleDragEnter, handleDragOver, handleDragLeave, handleDrop } = window._dragDropListeners;
+      container.removeEventListener('dragenter', handleDragEnter);
       container.removeEventListener('dragover', handleDragOver);
       container.removeEventListener('dragleave', handleDragLeave);
       container.removeEventListener('drop', handleDrop);
@@ -613,7 +558,43 @@ You can handle any request, including creative writing or technical questions, b
     }
     
     if (pdfFiles.length > 0) {
-      handleFileUpload({ target: { files } });
+      handlePdfUpload(pdfFiles);
+    }
+  };
+
+  // Handle file selection from input
+  const handleFileUpload = (e) => {
+    if (e.target.files && e.target.files.length > 0) {
+      handleFiles(e.target.files);
+    }
+  };
+
+  // Save message to memory
+  const saveToMemory = async (text, role = 'user', additionalMetadata = {}) => {
+    try {
+      const response = await fetch(MEMORY_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          userId: USER_ID,
+          text,
+          metadata: {
+            role,
+            timestamp: new Date().toISOString(),
+            isImportant: isImportant(text) || text.toLowerCase().includes('my name is') || text.toLowerCase().includes('i am called'), // Mark introduction and important messages as important
+            ...additionalMetadata
+          }
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to save to memory');
+      }
+    } catch (error) {
+      console.error('Error saving to memory:', error);
+      // Continue even if saving to memory fails
     }
   };
 

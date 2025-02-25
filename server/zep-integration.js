@@ -122,7 +122,7 @@ router.post('/memory', async (req, res) => {
 });
 
 // Upload and process PDF files
-router.post('/upload-pdf', upload.single('pdf'), async (req, res) => {
+router.post('/upload-pdf', upload.single('files'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No PDF file uploaded' });
@@ -215,43 +215,63 @@ router.post('/upload-pdf', upload.single('pdf'), async (req, res) => {
   }
 });
 
-// Search memory
-router.get('/memory', async (req, res) => {
+// Search memory for document content
+router.get('/documents/search', async (req, res) => {
   try {
-    const { userId, query, limit = 5, source } = req.query;
+    const { query, userId, limit = 15 } = req.query;
     
     if (!userId) {
       return res.status(400).json({ error: 'userId is required' });
     }
     
-    // Simple filtering function
-    const filterItem = (item) => {
-      if (item.metadata.userId !== userId) return false;
-      if (source && item.metadata.source !== source) return false;
-      if (query && !item.content.toLowerCase().includes(query.toLowerCase())) return false;
+    // Filter documents by user ID and source, then by query content if provided
+    let filteredDocs = memoryStore.documents.filter(doc => {
+      // Basic filter by user ID and PDF source
+      if (doc.metadata.userId !== userId || doc.metadata.source !== 'pdf') {
+        return false;
+      }
+      
+      // If query is provided, do a simple content search
+      if (query && !doc.content.toLowerCase().includes(query.toLowerCase())) {
+        return false;
+      }
+      
       return true;
-    };
+    });
     
-    // Combine messages and documents
-    const allItems = [...memoryStore.messages, ...memoryStore.documents];
+    // Sort by relevance if query is provided (basic implementation)
+    if (query) {
+      filteredDocs.sort((a, b) => {
+        // Simple relevance scoring - count occurrences of the query
+        const scoreA = (a.content.toLowerCase().match(new RegExp(query.toLowerCase(), 'g')) || []).length;
+        const scoreB = (b.content.toLowerCase().match(new RegExp(query.toLowerCase(), 'g')) || []).length;
+        return scoreB - scoreA; // Higher score first
+      });
+    }
     
-    // Filter and limit results
-    const results = allItems
-      .filter(filterItem)
-      .slice(0, parseInt(limit, 10))
-      .map(item => ({
-        content: item.content,
-        metadata: item.metadata,
-        score: 1.0 // Dummy score for compatibility
-      }));
+    // Limit results
+    const results = filteredDocs.slice(0, parseInt(limit, 10)).map(doc => {
+      return {
+        content: doc.content,
+        document: {
+          id: doc.id,
+          metadata: {
+            name: doc.metadata.filename,
+            pages: doc.metadata.pages,
+            timestamp: doc.metadata.timestamp
+          }
+        },
+        score: 1.0 // Default score
+      };
+    });
     
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       results
     });
   } catch (error) {
-    console.error('Error searching memory:', error);
-    res.status(500).json({ error: 'Failed to search memory', details: error.message });
+    console.error('Error searching documents:', error);
+    res.status(500).json({ error: 'Failed to search documents', details: error.message });
   }
 });
 
@@ -379,6 +399,51 @@ router.get('/status', async (req, res) => {
   } catch (error) {
     console.error('Error checking status:', error);
     res.status(500).json({ error: 'Failed to get status', details: error.message });
+  }
+});
+
+// Get a list of documents
+router.get('/documents', async (req, res) => {
+  try {
+    const { userId } = req.query;
+    
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+    
+    // Filter PDF documents by user ID
+    const pdfDocs = memoryStore.documents.filter(
+      doc => doc.metadata.userId === userId && doc.metadata.source === 'pdf'
+    );
+    
+    // Group by filename to count chunks and get metadata
+    const docsMap = new Map();
+    
+    pdfDocs.forEach(doc => {
+      const filename = doc.metadata.filename;
+      if (!docsMap.has(filename)) {
+        docsMap.set(filename, {
+          name: filename,
+          chunk_count: 1,
+          metadata: {
+            pages: doc.metadata.pages,
+            filesize: doc.metadata.filesize,
+            timestamp: doc.metadata.timestamp
+          }
+        });
+      } else {
+        const docEntry = docsMap.get(filename);
+        docEntry.chunk_count += 1;
+      }
+    });
+    
+    res.json({
+      success: true,
+      documents: Array.from(docsMap.values())
+    });
+  } catch (error) {
+    console.error('Error retrieving documents:', error);
+    res.status(500).json({ error: 'Failed to retrieve documents', details: error.message });
   }
 });
 
