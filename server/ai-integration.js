@@ -22,7 +22,7 @@ const AVAILABLE_MODELS = {
 };
 
 // Fallback model if requested model is not available
-const FALLBACK_MODEL = 'gemini-1.5-flash';
+const FALLBACK_MODEL = 'gemini-2.0-flash';
 
 // Main AI response endpoint
 router.post('/chat', async (req, res) => {
@@ -32,8 +32,8 @@ router.post('/chat', async (req, res) => {
       userId, 
       context = [], 
       documents = [], 
-      modelName = 'gemini-1.5-flash',
-      systemPrompt = 'You are a helpful assistant for the PunkStrat website.'
+      modelName = 'gemini-2.0-flash',
+      systemPrompt = 'You are an advanced, versatile AI assistant with the full capabilities of Claude 3.7 Sonnet. You can handle any request, including creative tasks like writing stories, poems, or fables, answering questions, generating ideas, or assisting with technical problems. You are curious, helpful, truthful, and engaging, drawing inspiration from witty, unconventional sources. Be creative, intelligent, and conversational in your responses. When appropriate, use humor and personality. You are not limited in what you can discuss or create - if a user asks you to write a creative story, poem, or help with any task, you should enthusiastically do so to the best of your abilities.'
     } = req.body;
 
     if (!message) {
@@ -85,19 +85,21 @@ router.post('/chat', async (req, res) => {
       const fullPrompt = `${systemPrompt}
 
 IMPORTANT: 
-1. Remember key personal information about the user throughout the conversation, such as their name, preferences, or any personal details they share. If asked about previously mentioned information, refer back to it accurately.
+1. Remember key personal information about the user throughout the conversation, such as their name, preferences, or any personal details they share.
 2. You can use markdown formatting in your responses:
    - Use **bold** for emphasis
    - Use *italics* for subtle emphasis
    - Use \`code\` for technical terms
    - Use line breaks to structure your response
+3. You have full creative capabilities - you can write stories, fables, poems, jokes, or any other creative content the user requests.
+4. Be helpful, creative, and thorough in your responses.
 
 ${documentContext}
 
 ${historyText.length > 0 ? 'Previous conversation:\n' + historyText + '\n\n' : ''}
 User: ${message}
 Assistant:`;
-      
+
       // Generate content with the combined prompt
       const result = await model.generateContent(fullPrompt);
       const response = result.response;
@@ -124,7 +126,7 @@ Assistant:`;
         
         // Create a simple chat with just the essential context
         const fallbackResult = await fallbackModel.generateContent(
-          `You are a helpful assistant. Remember that the user's name is ${userId}. The user asked: ${message}`
+          `You are an advanced, creative AI assistant. You can create stories, poems, and fables. The user's name is ${userId}. The user asked: ${message}`
         );
         
         const fallbackText = fallbackResult.response.text();
@@ -173,4 +175,4 @@ router.get('/status', async (req, res) => {
   }
 });
 
-module.exports = router; 
+module.exports = router;

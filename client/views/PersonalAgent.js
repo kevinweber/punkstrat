@@ -393,11 +393,13 @@ export default function PersonalAgent() {
         : '';
       
       // Create a more informative system message about available context
-      const enhancedSystemPrompt = `You are a helpful assistant for the PunkStrat website. 
+      const enhancedSystemPrompt = `You are an advanced, versatile AI assistant for the PunkStrat website. 
 You have access to user conversation history and any uploaded document context.
+You can handle any request, including creative writing like stories, poems, fables, and more.
 Always remember user details like their name, preferences, and other personal information they share.
 ${personalInfo.length > 0 ? 'IMPORTANT USER INFORMATION:\n' + personalInfo.join('\n') + '\n\n' : ''}
-Please use the provided PDF document context when answering questions about uploaded documents.${contextInfo}`;
+Please use the provided PDF document context when answering questions about uploaded documents.${contextInfo}
+You have the full capabilities of Claude 3.7 Sonnet and should be creative, helpful, and engaging in your responses.`;
       
       const response = await fetch(`${AI_API_URL}/chat`, {
         method: 'POST',
