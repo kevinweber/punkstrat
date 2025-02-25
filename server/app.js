@@ -10,9 +10,8 @@ const fs = require('fs');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const aiIntegration = require('./ai-integration');
-const googleContextCache = require('./google-context-cache');
 
-// FYI: `npx kill-port 8000`
+// Constants
 const PORT = process.env.PORT || 8000;
 const IS_DEV = process.env.NODE_ENV === 'development';
 const clientPath = path.join(__dirname, '..', 'client');
@@ -20,51 +19,86 @@ const clientPath = path.join(__dirname, '..', 'client');
 // Initialize Express app
 const app = express();
 
-// Middleware
+// Apply middleware
 app.use(cors());
-app.use(bodyParser.json({ limit: '50mb' }));
-app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
+app.use(bodyParser.json({ limit: '10mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
 app.use(express.static(clientPath));
 
-// API routes - using aiIntegration for the AI endpoints
+// API routes
 app.use(aiIntegration.router);
 
-// Use Google Context Cache for memory and document handling
-// Keeping the '/api/zep' endpoint for compatibility
-app.use('/api/zep', googleContextCache);
-
-// CORS headers for development
-if (IS_DEV) {
-  app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    next();
+// Simple status endpoint for client initialization
+app.get('/api/status', (req, res) => {
+  // Get AI status from the AI integration module
+  const aiStatus = aiIntegration.getStatus();
+    
+  return res.json({
+    success: true,
+    status: {
+      isConfigured: aiStatus.isConfigured,
+      supportedModels: aiStatus.supportedModels,
+      defaultModel: aiStatus.defaultModel
+    }
   });
-}
-
-// Emulate GitHub Pages behavior:
-// Any URL that points to a non-existing HTML file gets redirected to 404.html
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, '../client/index.html')));
-app.get('/:page/:subpage?', (req, res) => {
-  function getPath(runFunction) {
-    const isSubPage = !!req.params.subpage;
-    return isSubPage ? runFunction(clientPath, req.params.page, `${req.params.subpage}.html`) : runFunction(clientPath, `${req.params.page}.html`);
-  }
-
-  const absolutePath = getPath(path.join);
-
-  if (fs.existsSync(absolutePath)) {
-    return res.sendFile(getPath(path.resolve));
-  }
-
-  return res.status(404).sendFile(path.resolve(clientPath, '404.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`⚡️[server]: Server is running at port ${PORT} in NODE_ENV: ${process.env.NODE_ENV}`);
-  console.log('⚡️[server]: Using Google AI for document processing and conversation memory');
-  if (IS_DEV) {
-    console.log(`⚡️[server]: Visit http://localhost:${PORT}`);
-  }
+// Set up static routes for SPA
+app.get('/', (req, res) => res.sendFile(path.join(clientPath, 'index.html')));
+app.get('/personal-agent', (req, res) => res.sendFile(path.join(clientPath, 'personal-agent.html')));
+
+// Gracefully handle 404s
+app.use((req, res) => {
+  res.status(404).sendFile(path.join(clientPath, '404.html'));
 });
+
+// Error handler
+app.use((err, req, res, next) => {
+  console.error('Server error:', err);
+  res.status(500).json({ 
+    success: false, 
+    error: 'Server error', 
+    message: IS_DEV ? err.message : 'Internal server error'
+  });
+});
+
+// Start the server with port checking
+const startServer = () => {
+  // Check if port is in use and handle gracefully
+  const server = app.listen(PORT, () => {
+    console.log(`⚡️[server]: Server running at port ${PORT} in mode: ${process.env.NODE_ENV || 'production'}`);
+    console.log('⚡️[server]: Simple chat application with Google AI models');
+    if (IS_DEV) {
+      console.log(`⚡️[server]: Visit http://localhost:${PORT}`);
+    }
+  });
+  
+  server.on('error', (e) => {
+    if (e.code === 'EADDRINUSE') {
+      console.error(`Port ${PORT} is already in use. Please use a different port or close the application using this port.`);
+      process.exit(1);
+    } else {
+      console.error('Server failed to start:', e);
+      process.exit(1);
+    }
+  });
+  
+  // Graceful shutdown
+  process.on('SIGTERM', () => {
+    console.log('SIGTERM received, shutting down server');
+    server.close(() => {
+      console.log('Server closed');
+      process.exit(0);
+    });
+  });
+  
+  process.on('SIGINT', () => {
+    console.log('SIGINT received, shutting down server');
+    server.close(() => {
+      console.log('Server closed');
+      process.exit(0);
+    });
+  });
+};
+
+startServer();

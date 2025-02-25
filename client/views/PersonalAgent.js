@@ -4,286 +4,193 @@ import LogoLinkHome from '../components/LogoLinkHome.js';
 
 const html = htm.bind(h);
 
-// API endpoints
-const API_BASE_URL = '/api/zep';
-const AI_API_URL = '/api/ai';
-const MEMORY_ENDPOINT = `${API_BASE_URL}/memory`;
-const STATUS_ENDPOINT = `${AI_API_URL}/status`;
-
-// Get user ID from URL query parameters or use default
+/**
+ * Generate or retrieve a consistent user ID for the session
+ * @returns {string} User ID
+ */
 function getUserId() {
-  const urlParams = new URLSearchParams(window.location.search);
-  return urlParams.get('userId') || 'default';
+  const existingId = sessionStorage.getItem('punkstrat_user_id');
+  if (existingId) return existingId;
+  
+  // Create a new random ID and store it
+  const newId = 'user_' + Math.random().toString(36).substring(2, 15);
+  sessionStorage.setItem('punkstrat_user_id', newId);
+  return newId;
 }
 
-// Use a stable user ID
+// User ID for the current session
 const USER_ID = getUserId();
 
-// Format message with support for Markdown-like syntax and line breaks
+/**
+ * Format message content with markdown-like syntax for display
+ * @param {string} message - The message text to format
+ * @returns {string} HTML formatted message
+ */
 const formatMessage = (message) => {
   if (!message) return '';
   
-  // Replace line breaks with <br> tags
-  let formatted = message.replace(/\n/g, '<br>');
-  
-  // Bold text
-  formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-  
-  // Italic text
-  formatted = formatted.replace(/\*(.*?)\*/g, '<em>$1</em>');
-  
-  // Code blocks
-  formatted = formatted.replace(/```(.*?)```/gs, '<pre><code>$1</code></pre>');
-  
-  // Inline code
-  formatted = formatted.replace(/`(.*?)`/g, '<code>$1</code>');
-  
+  // Apply formatting rules
+  let formatted = message
+    // Bold text
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    // Italic text
+    .replace(/\*(.*?)\*/g, '<em>$1</em>')
+    // Inline code
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    // Line breaks
+    .replace(/\n/g, '<br>');
+    
   return formatted;
 };
 
-// Check if a message contains personal information that should be flagged as important
+/**
+ * Check if a message is important based on keywords
+ * @param {Object} message - Message object with role and content
+ * @returns {boolean} Whether the message is important
+ */
 const isImportant = (message) => {
-  const content = message.content.toLowerCase();
-  return content.includes('my name is') || 
-         content.includes('i am called') || 
-         content.includes('i\'m called') ||
-         content.includes('call me');
+  if (message.role !== 'system') return false;
+  
+  const importantKeywords = ['error', 'warning', 'failed', 'issue', 'success', 'completed'];
+  return importantKeywords.some(keyword => 
+    message.content.toLowerCase().includes(keyword)
+  );
 };
 
-// Load PDF.js (we'll add this to the HTML file)
-const loadPdfJs = async () => {
-  if (window.pdfjsLib) return window.pdfjsLib;
-
-  // We'll check if it exists first
-  return new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = 'https://unpkg.com/pdfjs-dist@3.5.141/build/pdf.min.js';
-    script.onload = () => resolve(window.pdfjsLib);
-    script.onerror = reject;
-    document.head.appendChild(script);
-  });
-};
-
+/**
+ * PersonalAgent component - Provides an AI chat interface
+ */
 export default function PersonalAgent() {
   // State hooks
   const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState('');
+  const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingTimeout, setLoadingTimeout] = useState(false);
   const [availableModels, setAvailableModels] = useState([]);
-  const [selectedModel, setSelectedModel] = useState('gemini-1.5-pro');
-  const [uploadedPdfs, setUploadedPdfs] = useState([]);
-  const [isPdfUploading, setIsPdfUploading] = useState(false);
-  const [loadingTime, setLoadingTime] = useState(0);
-  const [dragActive, setDragActive] = useState(false);
+  const [selectedModel, setSelectedModel] = useState('');
+  const [isInitializing, setIsInitializing] = useState(true);
+  const [aiConfigured, setAiConfigured] = useState(true);
 
   // Refs
-  const messagesEndRef = useRef(null);
+  const conversationRef = useRef(null);
   const conversationHistory = useRef([]);
-  const fileInputRef = useRef(null);
-  const documentContext = useRef([]);
-  const loadingTimerRef = useRef(null);
+  const timeoutRef = useRef(null);
 
-  // Initialize and load data on component mount
+  // Initialize the agent when the component mounts
   useEffect(() => {
-    async function initializeAgent() {
-      try {
-        // Check AI API status
-        await checkAiStatus();
-        // Load conversation history
-        await loadHistory();
-        // Load PDF.js library
-        await loadPdfJs();
-        // Load list of previously uploaded PDFs
-        await loadUploadedPdfs();
-        // Setup drag-and-drop listeners for file uploads
-        setupDragAndDrop();
-      } catch (error) {
-        console.error('Error initializing:', error);
-      }
-    }
-
     initializeAgent();
-
-    // Cleanup function to remove drag-and-drop listeners
+    
     return () => {
-      cleanupDragAndDrop();
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
     };
   }, []);
 
-  // Scroll to bottom of messages when messages change
+  // Auto-scroll to the newest messages
   useEffect(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    if (conversationRef.current) {
+      conversationRef.current.scrollTop = conversationRef.current.scrollHeight;
     }
   }, [messages]);
 
-  // Use effect for loading timer
-  useEffect(() => {
-    if (isLoading) {
-      setLoadingTime(0);
-      loadingTimerRef.current = setInterval(() => {
-        setLoadingTime(prevTime => prevTime + 1);
-      }, 1000);
-    } else {
-      clearInterval(loadingTimerRef.current);
-    }
+  /**
+   * Initialize the agent - check AI status and set up conversation
+   */
+  async function initializeAgent() {
+    setIsInitializing(true);
     
-    return () => {
-      clearInterval(loadingTimerRef.current);
-    };
-  }, [isLoading]);
-
-  // Initialize AI service and load settings
-  const checkAiStatus = async () => {
     try {
-      const response = await fetch('/api/ai/status');
-      if (!response.ok) {
-        throw new Error(`Failed to check AI status: ${response.status}`);
-      }
+      // Check AI status and get available models
+      const status = await checkAiStatus();
       
-      const data = await response.json();
-      console.log('AI status check response:', data);
-      
-      if (data.success && data.status && data.status.isConfigured) {
-        console.log('AI service is ready');
-        
-        // Set available models
-        if (data.status.supportedModels && data.status.supportedModels.length > 0) {
-          setAvailableModels(data.status.supportedModels);
-          // Use the default model or first available
-          setSelectedModel(data.status.defaultModel || data.status.supportedModels[0] || 'gemini-1.5-pro');
-        } else {
-          // No models available, set default
-          console.log('No models available from API, using default model');
-          setAvailableModels(['gemini-1.5-pro']);
-          setSelectedModel('gemini-1.5-pro');
-        }
-      } else {
-        console.warn('AI service is not configured properly');
-        // Set default models even if service isn't configured
-        setAvailableModels(['gemini-1.5-pro']);
-        setSelectedModel('gemini-1.5-pro');
-        
-        setMessages(prev => [
-          ...prev,
-          {
-            role: 'system',
-            content: 'The AI service is not configured properly. Please check your server logs.'
-          }
-        ]);
-      }
-    } catch (error) {
-      console.error('Error checking AI status:', error);
-      // Set default models even on error
-      setAvailableModels(['gemini-1.5-pro']);
-      setSelectedModel('gemini-1.5-pro');
-    }
-  };
-
-  // Load conversation history from Zep memory
-  const loadHistory = async () => {
-    try {
-      // Fetch conversation history from Zep memory
-      const response = await fetch(`/api/zep/memory?userId=${USER_ID}&source=conversation`);
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch memory: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      
-      if (data && data.results && data.results.length > 0) {
-        // Sort results by timestamp if available
-        const sortedResults = [...data.results].sort((a, b) => {
-          const timeA = a.metadata?.timestamp || '0';
-          const timeB = b.metadata?.timestamp || '0';
-          return new Date(timeA) - new Date(timeB);
-        });
-        
-        // Extract messages from results
-        const historyMessages = sortedResults.map(item => ({
-          role: item.metadata?.role || 'system',
-          content: item.content
-        }));
-        
-        // Update conversation history
-        conversationHistory.current = historyMessages;
-        
-        // Set messages state with welcome message and loaded history
-        setMessages([
-          { 
-            role: 'system', 
-            content: 'Welcome to your Personal AI Agent! Ask me anything or upload documents for me to analyze.' 
-          },
-          ...historyMessages
-        ]);
-      } else {
-        // If no history found, just show welcome message
-        setMessages([
-          { 
-            role: 'system', 
-            content: 'Welcome to your Personal AI Agent! Ask me anything or upload documents for me to analyze.' 
-          }
-        ]);
-      }
-    } catch (error) {
-      console.error('Error loading history:', error);
-      
-      // Show welcome message even if error occurs
+      // Initial welcome message
       setMessages([
-        { 
-          role: 'system', 
-          content: 'Welcome to your Personal AI Agent! Ask me anything or upload documents for me to analyze.' 
+        {
+          role: 'system',
+          content: status.isConfigured 
+            ? 'Welcome to Personal Agent! How can I help you today?' 
+            : '⚠️ AI API not configured. Please add your GOOGLE_AI_API_KEY to .env'
         }
       ]);
+      
+      // Initial system instruction
+      conversationHistory.current = [
+        {
+          role: 'system',
+          content: 'You are a helpful AI assistant for the PunkStrat website.'
+        }
+      ];
+      
+    } catch (error) {
+      console.error('Initialization error:', error);
+      setMessages([
+        {
+          role: 'system',
+          content: `⚠️ Initialization error: ${error.message}. Please refresh the page or try again later.`
+        }
+      ]);
+      setAiConfigured(false);
+    } finally {
+      setIsInitializing(false);
     }
-  };
+  }
 
-  // Load previously uploaded PDFs
-  const loadUploadedPdfs = async () => {
+  /**
+   * Check AI API status and get available models
+   */
+  const checkAiStatus = async () => {
     try {
-      const response = await fetch(`/api/zep/documents?userId=${USER_ID}`);
+      const response = await fetch('/api/status');
+      
       if (!response.ok) {
-        throw new Error(`Failed to fetch documents: ${response.status}`);
+        throw new Error(`AI status check failed: ${response.status}`);
       }
       
       const data = await response.json();
-      if (data && data.documents) {
-        setUploadedPdfs(data.documents.map(doc => ({
-          name: doc.name,
-          summary: doc.metadata?.summary || 'No summary available',
-          pages: doc.metadata?.pages || '?'
-        })));
-        
-        // If there are documents, inform the user about them
-        if (data.documents.length > 0) {
-          const docNames = data.documents.map(doc => doc.name).join(', ');
-          setMessages(prev => {
-            // Check if we already have this message to avoid duplication
-            if (!prev.some(m => m.role === 'system' && m.content.includes('Available PDFs:'))) {
-              return [
-                ...prev,
-                {
-                  role: 'system',
-                  content: `Available PDFs: ${docNames}. You can ask questions about these documents.`
-                }
-              ];
-            }
-            return prev;
-          });
-        }
+      
+      if (!data.success) {
+        throw new Error(data.error || 'Unknown error checking AI status');
       }
+      
+      const status = data.status || {};
+      const isConfigured = !!status.isConfigured;
+      const models = status.supportedModels || [];
+      const defaultModel = status.defaultModel || 'gemini-2.0-flash';
+      
+      console.log('AI Status:', status);
+      setAiConfigured(isConfigured);
+      
+      if (!isConfigured) {
+        console.warn('⚠️ AI API not configured properly');
+      }
+      
+      // Set available models and default selection
+      if (models && models.length > 0) {
+        setAvailableModels(models);
+        setSelectedModel(defaultModel || models[0]);
+      } else {
+        // If no models returned, set defaults
+        setAvailableModels(['gemini-2.0-flash', 'gemini-1.5-pro']);
+        setSelectedModel('gemini-2.0-flash');
+      }
+      
+      return status;
     } catch (error) {
-      console.error('Error loading uploaded PDFs:', error);
+      console.error('Error checking AI status:', error);
+      
+      // Set default model if there's an error
+      setAvailableModels(['gemini-2.0-flash', 'gemini-1.5-pro']);
+      setSelectedModel('gemini-2.0-flash');
+      setAiConfigured(false);
+      
+      throw error;
     }
   };
 
-  // Handle input change in textarea
-  const handleInputChange = (e) => {
-    setInput(e.target.value);
-  };
-
-  // Handle key press in textarea (send on Enter)
+  // Input handlers
+  const handleInputChange = (e) => setInputValue(e.target.value);
+  
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -291,551 +198,122 @@ export default function PersonalAgent() {
     }
   };
 
-  // Handle file upload button click
-  const handleUploadClick = () => {
-    fileInputRef.current.click();
-  };
-
-  // Process and upload PDF files
-  const handlePdfUpload = async (files) => {
-    if (files.length === 0) return;
-    
-    setIsPdfUploading(true);
-    setMessages(prev => [
-      ...prev,
-      {
-        role: 'system',
-        content: `Processing ${files.length} PDF file(s)... This may take a moment as I analyze each document.`
-      }
-    ]);
-    
-    try {
-      // Upload each file sequentially for better reliability
-      const results = [];
-      
-      for (const file of files) {
-        setMessages(prev => [
-          ...prev,
-          {
-            role: 'system',
-            content: `Analyzing "${file.name}"...`
-          }
-        ]);
-        
-        const formData = new FormData();
-        formData.append('files', file);
-        formData.append('userId', USER_ID);
-        
-        const response = await fetch('/api/zep/upload-pdf', {
-          method: 'POST',
-          body: formData
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Upload failed for ${file.name}: ${response.status}`);
-        }
-        
-        const result = await response.json();
-        results.push(result);
-        
-        setMessages(prev => [
-          ...prev,
-          {
-            role: 'system',
-            content: `Finished processing "${file.name}".`
-          }
-        ]);
-      }
-      
-      // Update uploaded PDFs list
-      await loadUploadedPdfs();
-      
-      // Inform user of successful upload with clearer instructions
-      setMessages(prev => [
-        ...prev,
-        {
-          role: 'system',
-          content: `Successfully processed ${files.length} PDF file(s). ✅\n\nYou can now ask questions like:\n- "Summarize [document name]"\n- "What are the key points in [document name]?"\n- "Extract important information from [document name]"`
-        }
-      ]);
-      
-      // Add system message about added content for the AI
-      const fileNames = Array.from(files).map(file => file.name).join(', ');
-      
-      // Add special message specifically for the AI to know about the PDFs
-      conversationHistory.current = [
-        ...conversationHistory.current,
-        {
-          role: 'system',
-          content: `The user has uploaded the following PDFs: ${fileNames}. Please refer to these documents by name when discussing their content. If asked to summarize or analyze a document, provide a comprehensive analysis that covers all major points in the document.`
-        }
-      ];
-    } catch (error) {
-      console.error('Error uploading PDF:', error);
-      setMessages(prev => [
-        ...prev,
-        {
-          role: 'system',
-          content: `Error uploading PDF: ${error.message}`
-        }
-      ]);
-    } finally {
-      setIsPdfUploading(false);
-    }
-  };
-
-  // Send message to AI
+  /**
+   * Send message to the AI and process response
+   */
   const sendMessage = async () => {
-    if (!input.trim() || isLoading) return;
-    
-    const userMessage = {
+    // Validation
+    if (!inputValue.trim() || isLoading || !aiConfigured) return;
+
+    const userMessage = inputValue.trim();
+    setInputValue('');
+
+    // Add user message to the UI
+    setMessages(prevMessages => [
+      ...prevMessages,
+      { role: 'user', content: userMessage }
+    ]);
+
+    // Add user message to conversation history
+    conversationHistory.current.push({
       role: 'user',
-      content: input
-    };
-    
-    // Update UI with user message
-    setMessages(prev => [...prev, userMessage]);
-    setInput('');
+      content: userMessage
+    });
+
+    // Set loading state
     setIsLoading(true);
     
-    // Update conversation history
-    conversationHistory.current = [...conversationHistory.current, userMessage];
-    
+    // Set a timeout for slow responses
+    timeoutRef.current = setTimeout(() => {
+      setLoadingTimeout(true);
+    }, 10000); // 10 seconds timeout
+
     try {
-      // Get relevant document context for the query
-      let documentContext = [];
-      try {
-        const encodedQuery = encodeURIComponent(input);
-        const docResponse = await fetch(`/api/zep/documents/search?userId=${USER_ID}&query=${encodedQuery}`);
-        
-        if (docResponse.ok) {
-          const docData = await docResponse.json();
-          
-          if (docData.success && docData.results && docData.results.length > 0) {
-            // Add this information to the message history to track what PDF is being referenced
-            const docNames = new Set(docData.results.map(r => r.document.metadata.name));
-            
-            if (docNames.size > 0) {
-              setMessages(prev => [
-                ...prev,
-                {
-                  role: 'system',
-                  content: `Analyzing document(s): ${Array.from(docNames).join(', ')}`
-                }
-              ]);
-            }
-            
-            // Format document context for the AI
-            documentContext = docData.results.map(result => {
-              const docName = result.document.metadata?.name || 'Unknown document';
-              return `[${docName}]: ${result.content}`;
-            });
-          }
-        }
-      } catch (docError) {
-        console.error('Error retrieving document context:', docError);
-        // Continue even if document context retrieval fails
-      }
-      
-      // Find any important personal information in the history
-      const personalInfo = conversationHistory.current
-        .filter(msg => msg.role === 'user' && isImportant(msg))
-        .map(msg => msg.content);
-      
-      // Determine if this is a document analysis request
-      const isDocumentAnalysis = input.toLowerCase().includes('analyze') || 
-        input.toLowerCase().includes('summarize') || 
-        input.toLowerCase().includes('tell me about') ||
-        (documentContext.length > 0 && (
-          input.toLowerCase().includes('what is in') ||
-          input.toLowerCase().includes('what does') ||
-          input.toLowerCase().includes('content of')
-        ));
-      
-      // Set a longer timeout for document analysis
-      const timeout = isDocumentAnalysis ? 180000 : 120000; // 3 or 2 minutes
-      
-      // Create a timeout controller
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeout); 
-      
-      // Prepare updated prompt instructions for document analysis
-      let systemPromptAdditions = '';
-      if (isDocumentAnalysis) {
-        systemPromptAdditions = '\n\nYou are analyzing documents. This is critical for the user. Provide COMPLETE, thorough analysis without stopping mid-analysis. Include key information from the documents and organize your response with clear headings and bullet points.';
-      }
-      
-      // Create an empty assistant message to start the streaming response
-      const assistantMessageId = `msg-${Date.now()}`;
-      setMessages(prev => [
-        ...prev,
-        {
-          id: assistantMessageId,
-          role: 'assistant',
-          content: '',
-          isStreaming: true
-        }
-      ]);
-      
-      // Initialize SSE connection
-      const eventSource = new EventSource(`/api/ai/chat?userId=${encodeURIComponent(USER_ID)}`);
-      
-      // Prepare request data
-      const requestData = {
-        message: input,
-        userId: USER_ID,
-        model: selectedModel,
-        context: conversationHistory.current,
-        documents: documentContext,
-        streaming: true,
-        systemPrompt: `You are a helpful and knowledgeable AI assistant. ${personalInfo.length > 0 ? 'Important information about the user: ' + personalInfo.join('. ') : ''}${systemPromptAdditions}`
-      };
-      
-      // Send request to start streaming
-      fetch('/api/ai/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(requestData),
-        signal: controller.signal
-      }).catch(error => {
-        // Handle fetch errors (like network issues or aborted requests)
-        eventSource.close();
-        clearTimeout(timeoutId);
-        throw error;
-      });
-      
-      // Keep track of the accumulated response
-      let fullResponse = '';
-      
-      // Setup event handlers for SSE
-      eventSource.onopen = () => {
-        console.log('SSE connection established');
-      };
-      
-      eventSource.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          
-          switch(data.event) {
-            case 'start':
-              console.log('AI response started');
-              break;
-              
-            case 'chunk':
-              // Append new chunk to the full response
-              fullResponse += data.chunk;
-              
-              // Update the streaming message with the current accumulated text
-              setMessages(prev => 
-                prev.map(msg => 
-                  msg.id === assistantMessageId 
-                    ? { ...msg, content: fullResponse } 
-                    : msg
-                )
-              );
-              break;
-              
-            case 'complete':
-              // Final response received, update the message and mark as complete
-              const finalResponse = data.response;
-              
-              // Create the final assistant message
-              const assistantMessage = {
-                role: 'assistant',
-                content: finalResponse
-              };
-              
-              // Replace the streaming message with the complete one
-              setMessages(prev => 
-                prev.map(msg => 
-                  msg.id === assistantMessageId
-                    ? { ...assistantMessage, isStreaming: false }
-                    : msg
-                )
-              );
-              
-              // Update conversation history
-              conversationHistory.current = [
-                ...conversationHistory.current,
-                assistantMessage
-              ];
-              
-              // Clean up
-              eventSource.close();
-              clearTimeout(timeoutId);
-              
-              // Save to memory
-              saveToMemory(input, 'user');
-              saveToMemory(finalResponse, 'assistant');
-              break;
-              
-            case 'error':
-              // Handle error in the stream
-              throw new Error(data.error);
-              
-            case 'fallback-start':
-              console.log(`Switching to fallback model: ${data.model}`);
-              break;
-          }
-        } catch (err) {
-          console.error('Error processing SSE event:', err);
-          eventSource.close();
-          clearTimeout(timeoutId);
-          throw err;
-        }
-      };
-      
-      eventSource.onerror = (error) => {
-        console.error('SSE Error:', error);
-        eventSource.close();
-        clearTimeout(timeoutId);
-        
-        // Update the message to indicate error
-        setMessages(prev => 
-          prev.map(msg => 
-            msg.id === assistantMessageId
-              ? { 
-                  ...msg, 
-                  role: 'system',
-                  content: 'Error: Connection to AI service failed. Please try again.',
-                  isStreaming: false 
-                }
-              : msg
-          )
-        );
-        
-        setIsLoading(false);
-      };
-    } catch (error) {
-      console.error('Error sending message:', error);
-      
-      let errorMessage = error.message;
-      
-      // Check for timeout errors
-      if (error.name === 'AbortError') {
-        errorMessage = 'Request timed out. The response was taking too long to generate. Try a more specific question or a shorter document.';
-      }
-      
-      // Show error message
-      setMessages(prev => [
-        ...prev,
-        {
-          role: 'system',
-          content: `Error: ${errorMessage}. Please try again.`
-        }
-      ]);
-      
-      setIsLoading(false);
-    }
-  };
-
-  // Delete a PDF document
-  const handleDeletePdf = async (filename) => {
-    if (window.confirm(`Are you sure you want to delete "${filename}"?`)) {
-      try {
-        const response = await fetch(`/api/zep/pdfs/${encodeURIComponent(filename)}?userId=${USER_ID}`, {
-          method: 'DELETE'
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Failed to delete document: ${response.status}`);
-        }
-        
-        // Update the UI to reflect the deletion
-        setUploadedPdfs(prev => prev.filter(pdf => (pdf.name || pdf.filename) !== filename));
-        
-        // Add a system message about the deletion
-        setMessages(prev => [
-          ...prev,
-          {
-            role: 'system',
-            content: `Document "${filename}" has been deleted. It is no longer available for reference.`
-          }
-        ]);
-        
-        // Update conversation history about the deletion
-        conversationHistory.current = [
-          ...conversationHistory.current,
-          {
-            role: 'system',
-            content: `The user has deleted the PDF document: ${filename}. This document is no longer available for reference.`
-          }
-        ];
-      } catch (error) {
-        console.error('Error deleting PDF:', error);
-        setMessages(prev => [
-          ...prev,
-          {
-            role: 'system',
-            content: `Error deleting PDF: ${error.message}`
-          }
-        ]);
-      }
-    }
-  };
-
-  // Clear all conversation history
-  const handleClearHistory = async () => {
-    if (!window.confirm('Are you sure you want to clear your conversation history? This cannot be undone.')) {
-      return;
-    }
-    
-    try {
-      // We don't have a bulk delete endpoint, so we'll just reset the UI state
-      // In a real app, you would delete all conversation items from memory
-      
-      // Keep only the welcome message
-      const welcomeMessage = { 
-        role: 'system', 
-        content: 'Conversation history cleared. How can I help you today?' 
-      };
-      
-      setMessages([welcomeMessage]);
-      conversationHistory.current = [];
-      
-      // Notify that we're having a fresh start
-      console.log('Conversation history cleared');
-    } catch (error) {
-      console.error('Error clearing history:', error);
-    }
-  };
-
-  // Setup drag-and-drop event listeners
-  const setupDragAndDrop = () => {
-    const container = document.querySelector('.personal-agent-container');
-    if (!container) return;
-
-    const handleDragOver = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      container.classList.add('drag-active');
-      setDragActive(true);
-    };
-
-    const handleDragLeave = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      // Only remove the class if we're leaving the container (not entering a child)
-      if (!e.currentTarget.contains(e.relatedTarget)) {
-        container.classList.remove('drag-active');
-        setDragActive(false);
-      }
-    };
-
-    const handleDrop = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      container.classList.remove('drag-active');
-      setDragActive(false);
-
-      if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
-        // Process the dropped files
-        handleFiles(e.dataTransfer.files);
-      }
-    };
-
-    // Add dragenter event to show the indicator right away
-    const handleDragEnter = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      container.classList.add('drag-active');
-      setDragActive(true);
-    };
-
-    container.addEventListener('dragenter', handleDragEnter);
-    container.addEventListener('dragover', handleDragOver);
-    container.addEventListener('dragleave', handleDragLeave);
-    container.addEventListener('drop', handleDrop);
-
-    // Store event listeners in window for cleanup
-    window._dragDropListeners = {
-      container,
-      handleDragEnter,
-      handleDragOver,
-      handleDragLeave,
-      handleDrop
-    };
-  };
-
-  // Cleanup drag-and-drop event listeners
-  const cleanupDragAndDrop = () => {
-    if (window._dragDropListeners) {
-      const { container, handleDragEnter, handleDragOver, handleDragLeave, handleDrop } = window._dragDropListeners;
-      container.removeEventListener('dragenter', handleDragEnter);
-      container.removeEventListener('dragover', handleDragOver);
-      container.removeEventListener('dragleave', handleDragLeave);
-      container.removeEventListener('drop', handleDrop);
-      delete window._dragDropListeners;
-    }
-  };
-
-  // Process uploaded files
-  const handleFiles = (files) => {
-    const pdfFiles = Array.from(files).filter(file => file.type === 'application/pdf');
-    
-    if (pdfFiles.length === 0) {
-      setMessages(prev => [
-        ...prev, 
-        { 
-          role: 'system', 
-          content: 'Only PDF files are supported. Please upload PDF files only.' 
-        }
-      ]);
-      return;
-    }
-    
-    handlePdfUpload(pdfFiles);
-  };
-
-  // Handle file selection from input
-  const handleFileUpload = (e) => {
-    if (e.target.files && e.target.files.length > 0) {
-      handleFiles(e.target.files);
-    }
-  };
-
-  // Save message to memory
-  const saveToMemory = async (text, role = 'user', additionalMetadata = {}) => {
-    try {
-      const response = await fetch(MEMORY_ENDPOINT, {
+      // Call the AI service
+      const response = await fetch('/api/ai/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          userId: USER_ID,
-          text,
-          metadata: {
-            role,
-            timestamp: new Date().toISOString(),
-            isImportant: isImportant(text) || text.toLowerCase().includes('my name is') || text.toLowerCase().includes('i am called'), // Mark introduction and important messages as important
-            ...additionalMetadata
-          }
+          message: userMessage,
+          context: conversationHistory.current,
+          model: selectedModel
         })
       });
 
       if (!response.ok) {
-        throw new Error('Failed to save to memory');
+        throw new Error(`AI service error: ${response.status}`);
       }
+
+      const data = await response.json();
+      
+      if (!data.success) {
+        throw new Error(data.error || 'Unknown error processing your message');
+      }
+
+      // Clear loading timeout
+      clearTimeout(timeoutRef.current);
+      setLoadingTimeout(false);
+      
+      // Add AI response to the UI
+      setMessages(prevMessages => [
+        ...prevMessages.filter(m => m.role !== 'assistant' || !m.isLoading),
+        { role: 'assistant', content: data.response }
+      ]);
+
+      // Add AI response to conversation history
+      conversationHistory.current.push({
+        role: 'assistant',
+        content: data.response
+      });
+      
     } catch (error) {
-      console.error('Error saving to memory:', error);
-      // Continue even if saving to memory fails
+      console.error('Error sending message:', error);
+      
+      // Clear loading timeout
+      clearTimeout(timeoutRef.current);
+      setLoadingTimeout(false);
+      
+      // Show error message
+      setMessages(prevMessages => [
+        ...prevMessages.filter(m => m.role !== 'assistant' || !m.isLoading),
+        { 
+          role: 'system', 
+          content: `⚠️ Error: ${error.message}. Please try again.` 
+        }
+      ]);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // Render the component
+  /**
+   * Clear conversation history
+   */
+  const handleClearHistory = () => {
+    if (window.confirm('Are you sure you want to clear the conversation history?')) {
+      // Clear the UI
+      setMessages([
+        {
+          role: 'system',
+          content: 'Conversation history cleared. How can I help you today?'
+        }
+      ]);
+      
+      // Reset conversation history
+      conversationHistory.current = [
+        {
+          role: 'system',
+          content: 'You are a helpful AI assistant for the PunkStrat website.'
+        }
+      ];
+    }
+  };
+
   return html`
-    <div class="personal-agent-container ${dragActive ? 'drag-active' : ''}">
+    <div class="personal-agent-container">
       <h1 class="title">Personal AI Agent</h1>
-      <p>
-        <span class="highlight">
-          ${availableModels.length > 0
-      ? `Powered by ${selectedModel} with ${availableModels.length} models available`
-      : 'AI API not configured - Add your GOOGLE_AI_API_KEY to .env'}
-        </span>
-      </p>
       
       <div class="control-panel">
         <div class="model-selector">
@@ -844,6 +322,7 @@ export default function PersonalAgent() {
             id="model-select" 
             value=${selectedModel} 
             onChange=${e => setSelectedModel(e.target.value)}
+            disabled=${isLoading || isInitializing || !aiConfigured}
           >
             ${availableModels.map(model => html`
               <option value=${model}>${model}</option>
@@ -854,17 +333,35 @@ export default function PersonalAgent() {
         <button 
           class="clear-history-button" 
           onClick=${handleClearHistory}
+          disabled=${isLoading || messages.length <= 1 || !aiConfigured}
         >
-          Clear History
+          Clear Chat
         </button>
       </div>
       
-      <div class="conversation-box">
-        ${messages.map(message => html`
-          <div class="message ${message.role}">
-            <div class="message-content" dangerouslySetInnerHTML=${{ __html: formatMessage(message.content) }}></div>
+      ${!aiConfigured && html`
+        <div class="api-warning">
+          ⚠️ AI API not configured. Add your GOOGLE_AI_API_KEY to .env file and restart the server.
+        </div>
+      `}
+      
+      <div class="conversation-box" ref=${conversationRef}>
+        ${messages.map((message, index) => html`
+          <div class="message ${message.role} ${isImportant(message) ? 'important' : ''}">
+            <div 
+              class="message-content ${message.isLoading ? 'loading' : ''}"
+              dangerouslySetInnerHTML=${{ __html: message.isLoading 
+                ? '<div class="loading-indicator"><div><span class="dot"></span><span class="dot"></span><span class="dot"></span></div><div class="loading-text">Thinking...</div></div>'
+                : formatMessage(message.content)
+              }}
+            >
+            </div>
+            ${message.isLoading && loadingTimeout && html`
+              <div class="timeout-alert">This is taking longer than usual...</div>
+            `}
           </div>
         `)}
+        
         ${isLoading && html`
           <div class="message assistant">
             <div class="message-content loading">
@@ -874,83 +371,39 @@ export default function PersonalAgent() {
                   <span class="dot"></span>
                   <span class="dot"></span>
                 </div>
-                <span class="loading-text">Processing (${loadingTime}s)...</span>
-                ${loadingTime > 30 && html`
-                  <div class="timeout-alert">
-                    This is taking longer than usual. The AI is working on analyzing the document...
-                  </div>
-                `}
+                <div class="loading-text">Thinking...</div>
               </div>
+              ${loadingTimeout && html`
+                <div class="timeout-alert">This is taking longer than usual...</div>
+              `}
             </div>
           </div>
         `}
-        <div ref=${messagesEndRef}></div>
       </div>
       
       <div class="input-box">
         <textarea 
           class="message-input" 
-          placeholder="Type your message..."
-          value=${input}
+          value=${inputValue}
           onInput=${handleInputChange}
           onKeyDown=${handleKeyDown}
+          placeholder=${aiConfigured 
+            ? 'Type your message here...' 
+            : 'AI API not configured. Please add your API key.'}
+          disabled=${isLoading || isInitializing || !aiConfigured}
         ></textarea>
         <button 
           class="send-button" 
           onClick=${sendMessage}
-          disabled=${isLoading || !input.trim()}
+          disabled=${!inputValue.trim() || isLoading || isInitializing || !aiConfigured}
         >
           Send
         </button>
       </div>
       
-      <div class="file-upload-container">
-        <input 
-          type="file" 
-          ref=${fileInputRef} 
-          style="display: none" 
-          onChange=${handleFileUpload} 
-          accept=".pdf" 
-          multiple
-        />
-        <button 
-          class="upload-button" 
-          onClick=${handleUploadClick}
-          disabled=${isPdfUploading}
-        >
-          ${isPdfUploading ? 'Processing...' : 'Upload PDF'}
-        </button>
-        ${uploadedPdfs.length > 0 && html`
-          <div class="uploaded-pdfs">
-            <p>Uploaded PDFs:</p>
-            <ul>
-              ${uploadedPdfs.map(pdf => html`
-                <li>
-                  <div class="pdf-item">
-                    <div class="pdf-name">${pdf.name || pdf.filename}</div>
-                    <div class="pdf-details">
-                      ${pdf.pages ? `${pdf.pages} pages` : ''} 
-                      <button 
-                        class="delete-pdf-button" 
-                        onClick=${() => handleDeletePdf(pdf.name || pdf.filename)}
-                        title="Delete this PDF"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  </div>
-                  <div class="pdf-summary">${pdf.summary}</div>
-                </li>
-              `)}
-            </ul>
-          </div>
-        `}
+      <div class="footer-note">
+        Powered by Google Gemini Models | Using ${selectedModel || 'default'} model | Conversation stored locally in your browser
       </div>
-      
-      <p class="footer-note">
-        This AI chat is powered by Google's Gemini models with PDF knowledge base support.
-        Your conversation history and document knowledge are stored using Zep memory.
-      </p>
       
       <${LogoLinkHome}/>
     </div>
