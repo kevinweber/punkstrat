@@ -6,7 +6,7 @@ const https = require('https');
 const path = require('path');
 const fs = require('fs');
 const app = express();
-const zepIntegration = require('./zep-integration');
+const googleContextCache = require('./google-context-cache');
 const aiIntegration = require('./ai-integration');
 
 // FYI: `npx kill-port 8000`
@@ -19,7 +19,7 @@ app.use(express.static(clientPath));
 app.use(express.json()); // For parsing application/json
 
 // API routes
-app.use('/api/zep', zepIntegration);
+app.use('/api/zep', googleContextCache); // Using same endpoint for compatibility
 app.use('/api/ai', aiIntegration.router);
 
 // CORS headers for development
@@ -52,6 +52,7 @@ app.get('/:page/:subpage?', (req, res) => {
 
 app.listen(PORT, () => {
     console.log(`⚡️[server]: Server is running at port ${PORT} in NODE_ENV: ${process.env.NODE_ENV}`);
+    console.log('⚡️[server]: Using Google AI for document processing and conversation memory');
     if (IS_DEV) {
         console.log(`⚡️[server]: Visit http://localhost:${PORT}`);
     }

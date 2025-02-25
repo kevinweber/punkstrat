@@ -408,16 +408,30 @@ export default function PersonalAgent() {
         .filter(msg => msg.role === 'user' && isImportant(msg))
         .map(msg => msg.content);
       
-      // Prepare history in the format expected by the AI
-      const formattedHistory = conversationHistory.current.map(msg => ({
-        role: msg.role,
-        parts: [{ text: msg.content }]
-      }));
+      // Determine if this is a document analysis request
+      const isDocumentAnalysis = input.toLowerCase().includes('analyze') || 
+        input.toLowerCase().includes('summarize') || 
+        input.toLowerCase().includes('tell me about') ||
+        (documentContext.length > 0 && (
+          input.toLowerCase().includes('what is in') ||
+          input.toLowerCase().includes('what does') ||
+          input.toLowerCase().includes('content of')
+        ));
+      
+      // Set a longer timeout for document analysis
+      const timeout = isDocumentAnalysis ? 180000 : 120000; // 3 or 2 minutes
+      
+      // Create a timeout controller
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeout); 
+      
+      // Prepare updated prompt instructions for document analysis
+      let systemPromptAdditions = '';
+      if (isDocumentAnalysis) {
+        systemPromptAdditions = '\n\nYou are analyzing documents. This is critical for the user. Provide COMPLETE, thorough analysis without stopping mid-analysis. Include key information from the documents and organize your response with clear headings and bullet points.';
+      }
       
       // Send request to AI with increased timeout
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
-      
       const response = await fetch('/api/ai/chat', {
         method: 'POST',
         headers: {
@@ -427,9 +441,9 @@ export default function PersonalAgent() {
           message: input,
           userId: USER_ID,
           model: selectedModel,
-          context: formattedHistory,
+          context: conversationHistory.current,
           documents: documentContext,
-          systemPrompt: `You are a helpful and knowledgeable AI assistant. ${personalInfo.length > 0 ? 'Important information about the user: ' + personalInfo.join('. ') : ''}`
+          systemPrompt: `You are a helpful and knowledgeable AI assistant. ${personalInfo.length > 0 ? 'Important information about the user: ' + personalInfo.join('. ') : ''}${systemPromptAdditions}`
         }),
         signal: controller.signal
       });
@@ -453,15 +467,31 @@ export default function PersonalAgent() {
       
       // Update conversation history
       conversationHistory.current = [...conversationHistory.current, assistantMessage];
+      
+      // Save messages to memory for future retrieval
+      try {
+        await saveToMemory(input, 'user');
+        await saveToMemory(data.response, 'assistant');
+      } catch (memoryError) {
+        console.error('Error saving to memory:', memoryError);
+        // Continue even if saving to memory fails
+      }
     } catch (error) {
       console.error('Error sending message:', error);
+      
+      let errorMessage = error.message;
+      
+      // Check for timeout errors
+      if (error.name === 'AbortError') {
+        errorMessage = 'Request timed out. The response was taking too long to generate. Try a more specific question or a shorter document.';
+      }
       
       // Show error message
       setMessages(prev => [
         ...prev,
         {
           role: 'system',
-          content: `Error: ${error.message}. Please try again.`
+          content: `Error: ${errorMessage}. Please try again.`
         }
       ]);
     } finally {

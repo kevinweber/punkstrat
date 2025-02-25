@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
 
 // Initialize the Google Generative AI with the API key from environment variables
 const getGoogleAI = () => {
@@ -14,7 +14,7 @@ const getGoogleAI = () => {
   return new GoogleGenerativeAI(apiKey);
 };
 
-// Available models
+// Available models with increased context windows
 const AVAILABLE_MODELS = {
   'gemini-1.5-flash': 'Gemini 1.5 Flash',
   'gemini-1.5-pro': 'Gemini 1.5 Pro',
@@ -36,10 +36,28 @@ async function generateSummary(documentContent, documentName) {
       model: 'gemini-2.0-flash', // Use the fastest model for summaries 
       generationConfig: {
         temperature: 0.2, // Lower temperature for more factual summaries
-        maxOutputTokens: 2048, // Allow for detailed summaries
+        maxOutputTokens: 12288, // Significantly increased token limit for comprehensive summaries
         topP: 0.95,
         topK: 40,
-      }
+      },
+      safetySettings: [
+        {
+          category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+          threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        },
+        {
+          category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+          threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        },
+        {
+          category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+          threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        },
+        {
+          category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+          threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        },
+      ],
     });
     
     // Create a prompt for summarizing the document
@@ -54,12 +72,18 @@ ${documentContent}
 
 DETAILED SUMMARY:`;
     
-    const result = await model.generateContent(prompt);
-    const summary = result.response.text();
+    // Use streaming for more reliable handling of large responses
+    const result = await model.generateContentStream(prompt);
+    
+    // Process the streaming response
+    let fullSummary = '';
+    for await (const chunk of result.stream) {
+      fullSummary += chunk.text();
+    }
     
     return { 
       success: true, 
-      summary: summary,
+      summary: fullSummary,
       model: 'gemini-2.0-flash'
     };
   } catch (error) {
@@ -72,172 +96,7 @@ DETAILED SUMMARY:`;
   }
 }
 
-// Function to format prompt with all necessary context and instructions
-function formatPrompt(userInput, historyContext, documentContext) {
-  // Create a prompt header with clear instructions
-  const promptHeader = `You are a helpful and knowledgeable AI assistant. You can access information from uploaded PDF documents and remember the conversation history.
-
-IMPORTANT INSTRUCTIONS:
-- Remember key personal information about the user throughout the conversation (their name, preferences, etc.)
-- When referencing PDF content, mention which document the information comes from
-- Format your responses using markdown: **bold**, *italic*, \`code\`, etc.
-- Use line breaks to structure your responses
-- Remain factual and helpful, but also personable
-- Do not repeat phrases like "Based on the document" or "According to the PDF" excessively
-
-`;
-
-  // Format document context if available
-  let docContext = '';
-  if (documentContext && documentContext.length > 0) {
-    docContext = `DOCUMENT REFERENCES:\n${documentContext.join('\n\n')}\n\n`;
-  }
-
-  // Format conversation history to clearly separate messages
-  let history = '';
-  if (historyContext && historyContext.length > 0) {
-    history = historyContext.map(msg => {
-      return `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`;
-    }).join('\n\n');
-    history = `CONVERSATION HISTORY:\n${history}\n\n`;
-  }
-
-  // Combine all context
-  return promptHeader + docContext + history + `User: ${userInput}\n\nAssistant:`;
-}
-
-// Use Google AI to generate a response (not a React hook)
-async function generateAIResponse(prompt, model) {
-  try {
-    // Initialize the model with appropriate settings
-    const genAI = getGoogleAI();
-    if (!genAI) {
-      throw new Error('AI service not configured');
-    }
-    
-    const genModel = genAI.getGenerativeModel({
-      model: model,
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 4096, // Increased token limit for more complete responses
-        topP: 0.95,
-        topK: 40,
-      },
-    });
-    
-    // Generate content
-    const result = await genModel.generateContent(prompt);
-    const text = result.response.text();
-    return text;
-  } catch (error) {
-    console.error('Google AI error:', error);
-    throw new Error(`Google AI error: ${error.message}`);
-  }
-}
-
-// Simplified sendMessage function without reliance on Zep-specific functions
-async function sendMessage(userInput, userId, model = 'gemini-2.0-flash', systemPrompt = null) {
-  const userMessage = userInput.trim();
-  const sessionId = userId || 'default-session';
-  const modelName = model || 'gemini-2.0-flash';
-
-  try {
-    // Prepare the prompt with basic instructions
-    const basicPrompt = `${systemPrompt || 'You are a helpful AI assistant.'}\n\nUser: ${userInput}\n\nAssistant:`;
-    
-    // Get AI response
-    let response;
-    
-    try {
-      // Attempt to use specified model
-      response = await generateAIResponse(basicPrompt, modelName);
-    } catch (error) {
-      console.error(`Error with ${modelName}:`, error);
-      // Fall back to a different model if the specified one fails
-      console.log('Falling back to alternative model...');
-      response = await fallbackModel(basicPrompt, userMessage, []);
-    }
-    
-    return {
-      response,
-      model: modelName
-    };
-  } catch (error) {
-    console.error('Error in sendMessage:', error);
-    return {
-      response: `I'm having trouble processing your request. ${error.message}`,
-      error: error.message
-    };
-  }
-}
-
-// Function to use Google's Generative AI
-async function useGoogleAI(prompt, model) {
-  try {
-    // Initialize the model with appropriate settings
-    const genAI = await initializeGoogleAI();
-    const genModel = genAI.getGenerativeModel({
-      model: model,
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 2048,
-        topP: 0.95,
-        topK: 40,
-      },
-    });
-    
-    // Generate content
-    const result = await genModel.generateContent(prompt);
-    const text = result.response.text();
-    return text;
-  } catch (error) {
-    console.error('Google AI error:', error);
-    throw new Error(`Google AI error: ${error.message}`);
-  }
-}
-
-// Fallback model implementation (simpler approach)
-async function fallbackModel(prompt, userInput, historyContext) {
-  // Simple response generation based on user input
-  let response = 'I apologize, but I\'m currently experiencing technical difficulties with my primary model. ';
-  
-  // Extract user name if present in history
-  let userName = null;
-  if (historyContext && historyContext.length > 0) {
-    for (const msg of historyContext) {
-      if (msg.role === 'user') {
-        const content = msg.content.toLowerCase();
-        if (content.includes('my name is') || content.includes('i am called')) {
-          const nameMatch = content.match(/my name is (\w+)|i am called (\w+)/i);
-          if (nameMatch) {
-            userName = nameMatch[1] || nameMatch[2];
-            break;
-          }
-        }
-      }
-    }
-  }
-  
-  // Add personalized greeting if we know the user's name
-  if (userName) {
-    response += `I'll try my best to help you, ${userName}. `;
-  }
-  
-  // Simple keyword-based responses
-  if (userInput.toLowerCase().includes('hello') || userInput.toLowerCase().includes('hi')) {
-    response += 'Hello! How can I assist you today?';
-  } else if (userInput.toLowerCase().includes('help')) {
-    response += 'I can help you with information retrieval, answering questions, and discussing documents you\'ve uploaded.';
-  } else if (userInput.toLowerCase().includes('pdf') || userInput.toLowerCase().includes('document')) {
-    response += 'I can analyze PDF documents once you upload them. You can ask me specific questions about their content.';
-  } else {
-    response += 'I understand you\'re asking about: ' + userInput + '. Could you please try again when our main service is back online?';
-  }
-  
-  return response;
-}
-
-// Main AI response endpoint
+// Main AI chat endpoint
 router.post('/chat', async (req, res) => {
   try {
     const { 
@@ -270,15 +129,33 @@ router.post('/chat', async (req, res) => {
     }
 
     try {
-      // Try to initialize the model
+      // Initialize the model with appropriate settings
       const model = genAI.getGenerativeModel({ 
         model: selectedModel,
         generationConfig: {
           temperature: 0.7,
-          maxOutputTokens: 4096,  // Increased to 4096 for complete answers
+          maxOutputTokens: 12288,  // Tripled from previous 4096 for much more complete responses
           topP: 0.95,
           topK: 40,
-        }
+        },
+        safetySettings: [
+          {
+            category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+            threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+          },
+          {
+            category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+            threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+          },
+          {
+            category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+            threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+          },
+          {
+            category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+            threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+          },
+        ],
       });
       
       // Check if this is a document analysis request
@@ -309,7 +186,28 @@ router.post('/chat', async (req, res) => {
       
       // Format conversation history in a simple text format with clear role distinctions
       const historyText = context.length > 0 
-        ? context.map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.parts[0].text}`).join('\n\n') 
+        ? context.map(msg => {
+            // Handle different formats of context messages
+            let role = 'User';
+            let content = '';
+            
+            if (typeof msg === 'object') {
+              // Handle different possible formats of message objects
+              if (msg.role) {
+                role = msg.role === 'user' ? 'User' : 'Assistant';
+              }
+              
+              if (msg.parts && Array.isArray(msg.parts) && msg.parts.length > 0) {
+                content = msg.parts[0].text || '';
+              } else if (msg.content) {
+                content = msg.content;
+              }
+            } else if (typeof msg === 'string') {
+              content = msg;
+            }
+            
+            return `${role}: ${content}`;
+          }).join('\n\n') 
         : '';
         
       // Enhanced system prompt for document analysis
@@ -350,13 +248,14 @@ User: ${message}
 Assistant:`;
 
       // For document analysis, increase the timeout
-      const timeout = isDocumentAnalysis ? 120000 : 60000; // 2 minutes for doc analysis, 1 minute otherwise
+      const timeout = isDocumentAnalysis ? 180000 : 120000; // 3 minutes for doc analysis, 2 minutes otherwise
       
       // Generate content with the combined prompt and a timeout
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeout);
       
       try {
+        // Use streaming for more reliable handling of large responses
         const result = await model.generateContentStream(fullPrompt);
         clearTimeout(timeoutId);
         
@@ -392,14 +291,25 @@ Assistant:`;
       // If the selected model fails, fall back to the most stable model
       if (selectedModel !== FALLBACK_MODEL) {
         console.log(`Falling back to ${FALLBACK_MODEL} after error with ${selectedModel}`);
-        const fallbackModel = genAI.getGenerativeModel({ model: FALLBACK_MODEL });
+        const fallbackModel = genAI.getGenerativeModel({ 
+          model: FALLBACK_MODEL,
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 12288,
+            topP: 0.95,
+            topK: 40,
+          }
+        });
         
         // Create a simple chat with just the essential context
-        const fallbackResult = await fallbackModel.generateContent(
-          `You are an advanced, creative AI assistant. You can create stories, poems, and fables. The user's name is ${userId}. The user asked: ${message}`
+        const fallbackResponse = await fallbackModel.generateContentStream(
+          `You are an advanced, creative AI assistant. The user asked: ${message}`
         );
         
-        const fallbackText = fallbackResult.response.text();
+        let fallbackText = '';
+        for await (const chunk of fallbackResponse.stream) {
+          fallbackText += chunk.text();
+        }
         
         res.json({
           success: true,
@@ -436,7 +346,7 @@ router.get('/status', async (req, res) => {
         service: 'Google AI (Gemini Models)',
         ready: isConfigured,
         supportedModels: availableModels,
-        defaultModel: 'gemini-2.0-flash'
+        defaultModel: FALLBACK_MODEL
       }
     });
   } catch (error) {
@@ -447,6 +357,5 @@ router.get('/status', async (req, res) => {
 
 module.exports = {
   router,
-  generateSummary, // Export for use in Zep integration
-  sendMessage
+  generateSummary
 };
