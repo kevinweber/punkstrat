@@ -3,13 +3,29 @@ const https = require('https');
 const path = require('path');
 const fs = require('fs');
 const app = express();
+const zepIntegration = require('./zep-integration');
 
 // FYI: `npx kill-port 8000`
 const PORT = process.env.PORT || 8000;
 const IS_DEV = process.env.NODE_ENV === 'development';
 const clientPath = path.join(__dirname, '..', 'client');
 
+// Middleware
 app.use(express.static(clientPath));
+app.use(express.json()); // For parsing application/json
+
+// API routes
+app.use('/api/zep', zepIntegration);
+
+// CORS headers for development
+if (IS_DEV) {
+  app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    next();
+  });
+}
 
 // Emulate GitHub Pages behavior:
 // Any URL that points to a non-existing HTML file gets redirected to 404.html

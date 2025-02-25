@@ -21,5 +21,8 @@
     "nodemon": "^2.0.22",
     "preact": "^10.15.0",
     "preact-router": "^4.1.1"
+  },
+  "dependencies": {
+    "@getzep/zep-js": "^2.0.2"
   }
 }
