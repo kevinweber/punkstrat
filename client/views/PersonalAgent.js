@@ -20,6 +20,8 @@ const formatMessage = (message) => {
     .replace(/\*(.*?)\*/g, '<em>$1</em>')
     // Inline code
     .replace(/`([^`]+)`/g, '<code>$1</code>')
+    // Code blocks
+    .replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
     // Line breaks
     .replace(/\n/g, '<br>');
     
@@ -41,6 +43,26 @@ const isImportant = (message) => {
 };
 
 /**
+ * Get an emoji based on message content
+ * @param {string} content - Message content
+ * @returns {string} Appropriate emoji
+ */
+const getMessageEmoji = (content = '') => {
+  const lowerContent = content.toLowerCase();
+  
+  if (lowerContent.includes('hello') || lowerContent.includes('hi ') || lowerContent.includes('hey')) return '👋';
+  if (lowerContent.includes('thank')) return '🙏';
+  if (lowerContent.includes('love') || lowerContent.includes('like')) return '❤️';
+  if (lowerContent.includes('cool') || lowerContent.includes('awesome') || lowerContent.includes('amazing')) return '🔥';
+  if (lowerContent.includes('question') || lowerContent.includes('how') || lowerContent.includes('what') || lowerContent.includes('why')) return '❓';
+  if (lowerContent.includes('code') || lowerContent.includes('program') || lowerContent.includes('develop')) return '💻';
+  if (lowerContent.includes('idea') || lowerContent.includes('think')) return '💡';
+  
+  // Default - empty string, no emoji
+  return '';
+};
+
+/**
  * PersonalAgent component - Provides an AI chat interface
  */
 export default function PersonalAgent() {
@@ -53,11 +75,14 @@ export default function PersonalAgent() {
   const [selectedModel, setSelectedModel] = useState('');
   const [isInitializing, setIsInitializing] = useState(true);
   const [aiConfigured, setAiConfigured] = useState(true);
+  const [showEmoji, setShowEmoji] = useState(false);
+  const [lastActivityTime, setLastActivityTime] = useState(Date.now());
 
   // Refs
   const conversationRef = useRef(null);
   const conversationHistory = useRef([]);
   const timeoutRef = useRef(null);
+  const inputRef = useRef(null);
 
   // Initialize the agent when the component mounts
   useEffect(() => {
@@ -70,12 +95,38 @@ export default function PersonalAgent() {
     };
   }, []);
 
-  // Auto-scroll to the newest messages
+  // Auto-scroll to the newest messages with smooth behavior
   useEffect(() => {
     if (conversationRef.current) {
-      conversationRef.current.scrollTop = conversationRef.current.scrollHeight;
+      setTimeout(() => {
+        conversationRef.current.scrollTop = conversationRef.current.scrollHeight;
+      }, 100);
     }
   }, [messages]);
+
+  // Focus input when component loads
+  useEffect(() => {
+    if (inputRef.current && !isInitializing && aiConfigured) {
+      setTimeout(() => {
+        inputRef.current.focus();
+      }, 500);
+    }
+  }, [isInitializing, aiConfigured]);
+
+  // Update last activity time
+  useEffect(() => {
+    setLastActivityTime(Date.now());
+  }, [messages]);
+
+  // Reset emoji visibility after 3 seconds
+  useEffect(() => {
+    if (showEmoji) {
+      const timer = setTimeout(() => {
+        setShowEmoji(false);
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [showEmoji]);
 
   /**
    * Initialize the agent - check AI status and set up conversation
@@ -87,12 +138,15 @@ export default function PersonalAgent() {
       // Check AI status and get available models
       const status = await checkAiStatus();
       
+      // Add animation delay to improve perceived performance
+      await new Promise(resolve => setTimeout(resolve, 400));
+      
       // Initial welcome message
       setMessages([
         {
           role: 'system',
           content: status.isConfigured 
-            ? 'Welcome to Personal Agent! How can I help you today?' 
+            ? 'Welcome to Personal AI Agent! How can I help you today?' 
             : '⚠️ AI API not configured. Please add your GOOGLE_AI_API_KEY to .env'
         }
       ]);
@@ -181,6 +235,13 @@ export default function PersonalAgent() {
     }
   };
 
+  // Show emoji when send button is hovered
+  const handleSendHover = () => {
+    if (inputValue.trim()) {
+      setShowEmoji(true);
+    }
+  };
+
   /**
    * Send message to the AI and process response
    */
@@ -191,10 +252,17 @@ export default function PersonalAgent() {
     const userMessage = inputValue.trim();
     setInputValue('');
 
+    // Get emoji for the user message (if applicable)
+    const emoji = getMessageEmoji(userMessage);
+
     // Add user message to the UI
     setMessages(prevMessages => [
       ...prevMessages,
-      { role: 'user', content: userMessage }
+      { 
+        role: 'user', 
+        content: userMessage,
+        emoji
+      }
     ]);
 
     // Add user message to conversation history
@@ -239,10 +307,17 @@ export default function PersonalAgent() {
       clearTimeout(timeoutRef.current);
       setLoadingTimeout(false);
       
+      // Get emoji for the AI response (if applicable)
+      const responseEmoji = getMessageEmoji(data.response);
+      
       // Add AI response to the UI
       setMessages(prevMessages => [
         ...prevMessages.filter(m => m.role !== 'assistant' || !m.isLoading),
-        { role: 'assistant', content: data.response }
+        { 
+          role: 'assistant', 
+          content: data.response,
+          emoji: responseEmoji
+        }
       ]);
 
       // Add AI response to conversation history
@@ -250,6 +325,11 @@ export default function PersonalAgent() {
         role: 'assistant',
         content: data.response
       });
+      
+      // Focus the input field for continued conversation
+      if (inputRef.current) {
+        inputRef.current.focus();
+      }
       
     } catch (error) {
       console.error('Error sending message:', error);
@@ -294,8 +374,11 @@ export default function PersonalAgent() {
     }
   };
 
+  // Check for idle time - if more than 2 minutes, show subtle pulse around input
+  const isIdle = Date.now() - lastActivityTime > 120000;
+
   return html`
-    <div class="personal-agent-container">
+    <div class="personal-agent-container ${isInitializing ? 'initializing' : ''}">
       <h1 class="title">Personal AI Agent</h1>
       
       <div class="control-panel">
@@ -333,15 +416,21 @@ export default function PersonalAgent() {
           <div class="message ${message.role} ${isImportant(message) ? 'important' : ''}">
             <div 
               class="message-content ${message.isLoading ? 'loading' : ''}"
-              dangerouslySetInnerHTML=${{ __html: message.isLoading 
-                ? '<div class="loading-indicator"><div><span class="dot"></span><span class="dot"></span><span class="dot"></span></div><div class="loading-text">Thinking...</div></div>'
-                : formatMessage(message.content)
-              }}
             >
+              ${message.isLoading ? 
+                html`<div class="loading-indicator">
+                  <div><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+                  <div class="loading-text">Thinking...</div>
+                </div>` : 
+                html`
+                  ${message.emoji ? html`<span class="message-emoji">${message.emoji}</span>` : ''}
+                  <span dangerouslySetInnerHTML=${{ __html: formatMessage(message.content) }}></span>
+                `
+              }
+              ${message.isLoading && loadingTimeout && html`
+                <div class="timeout-alert">This is taking longer than usual...</div>
+              `}
             </div>
-            ${message.isLoading && loadingTimeout && html`
-              <div class="timeout-alert">This is taking longer than usual...</div>
-            `}
           </div>
         `)}
         
@@ -368,15 +457,18 @@ export default function PersonalAgent() {
         <textarea 
           class="message-input" 
           value=${inputValue}
+          ref=${inputRef}
           onInput=${handleInputChange}
           onKeyDown=${handleKeyDown}
           placeholder=${aiConfigured 
             ? 'Type your message here...' 
             : 'AI API not configured. Please add your API key.'}
           disabled=${isLoading || isInitializing || !aiConfigured}
+          rows="1"
         ></textarea>
+        
         <button 
-          class="send-button" 
+          class="send-button"
           onClick=${sendMessage}
           disabled=${!inputValue.trim() || isLoading || isInitializing || !aiConfigured}
         >
