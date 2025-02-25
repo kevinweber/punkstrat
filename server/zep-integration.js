@@ -38,6 +38,8 @@ const upload = multer({
 const memoryStore = {
   messages: [],
   documents: [],
+  sessions: {},
+  users: {},
   collections: [{
     name: 'personal_assistant',
     description: 'Personal Assistant Knowledge Collection',
@@ -48,7 +50,39 @@ const memoryStore = {
   }]
 };
 
-console.log('Using simplified in-memory storage for the demo app');
+// Helper to ensure user exists
+const ensureUser = (userId) => {
+  if (!memoryStore.users[userId]) {
+    memoryStore.users[userId] = {
+      uuid: userId,
+      created_at: new Date().toISOString(),
+      sessions: []
+    };
+  }
+  return memoryStore.users[userId];
+};
+
+// Helper to ensure session exists
+const ensureSession = (userId) => {
+  const user = ensureUser(userId);
+  if (!memoryStore.sessions[userId]) {
+    const sessionId = `session-${userId}-${Date.now()}`;
+    memoryStore.sessions[userId] = {
+      uuid: sessionId,
+      user_id: userId,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      metadata: { 
+        browser: 'Web Browser',
+        platform: 'Web'
+      }
+    };
+    user.sessions.push(sessionId);
+  }
+  return memoryStore.sessions[userId];
+};
+
+console.log('Using enhanced in-memory storage for building knowledge graph');
 console.log('Collection "personal_assistant" is ready to use');
 
 // Add a message to memory
@@ -60,10 +94,14 @@ router.post('/memory', async (req, res) => {
       return res.status(400).json({ error: 'userId and text are required' });
     }
     
+    // Ensure session exists for this user
+    const session = ensureSession(userId);
+    
     const documentId = `doc-${Date.now()}-${Math.round(Math.random() * 1E9)}`;
     
     memoryStore.messages.push({
       id: documentId,
+      session_id: session.uuid,
       content: text,
       metadata: {
         ...metadata,
@@ -73,7 +111,10 @@ router.post('/memory', async (req, res) => {
       }
     });
     
-    res.json({ success: true, documentId });
+    // Update session last interaction time
+    session.updated_at = new Date().toISOString();
+    
+    res.json({ success: true, documentId, sessionId: session.uuid });
   } catch (error) {
     console.error('Error adding to memory:', error);
     res.status(500).json({ error: 'Failed to store memory', details: error.message });
@@ -92,11 +133,27 @@ router.post('/upload-pdf', upload.single('pdf'), async (req, res) => {
       return res.status(400).json({ error: 'userId is required' });
     }
 
+    // Ensure session exists for this user
+    const session = ensureSession(userId);
+
     // Read the uploaded PDF file
     const dataBuffer = fs.readFileSync(req.file.path);
     
     // Parse the PDF content
     const pdfData = await pdfParse(dataBuffer);
+    
+    // Extract metadata from PDF
+    const metadata = {
+      userId,
+      filename: req.file.originalname,
+      filesize: req.file.size,
+      filetype: req.file.mimetype,
+      mime_type: req.file.mimetype,
+      source: 'pdf',
+      pages: pdfData.numpages,
+      timestamp: new Date().toISOString(),
+      session_id: session.uuid
+    };
     
     // Split the text into chunks to handle large documents
     const chunkSize = 1000; // characters per chunk
@@ -118,18 +175,20 @@ router.post('/upload-pdf', upload.single('pdf'), async (req, res) => {
       memoryStore.documents.push({
         id: documentId,
         content: chunk,
+        session_id: session.uuid,
         metadata: {
-          userId,
-          timestamp: new Date().toISOString(),
-          source: 'pdf',
-          filename: req.file.originalname,
+          ...metadata,
           chunkIndex: i,
-          totalChunks: chunks.length
+          totalChunks: chunks.length,
+          document_id: documentId
         }
       });
       
       documentIds.push(documentId);
     }
+    
+    // Update session last interaction time
+    session.updated_at = new Date().toISOString();
     
     // Clean up the uploaded file
     fs.unlinkSync(req.file.path);
@@ -137,8 +196,11 @@ router.post('/upload-pdf', upload.single('pdf'), async (req, res) => {
     res.json({ 
       success: true, 
       filename: req.file.originalname,
+      filetype: req.file.mimetype,
       documentIds,
       totalChunks: chunks.length,
+      pages: pdfData.numpages,
+      sessionId: session.uuid,
       summary: `Processed ${chunks.length} chunks from PDF with ${pdfData.numpages} pages`
     });
   } catch (error) {

@@ -24,6 +24,159 @@ const AVAILABLE_MODELS = {
 // Fallback model if requested model is not available
 const FALLBACK_MODEL = 'gemini-2.0-flash';
 
+// Function to format prompt with all necessary context and instructions
+function formatPrompt(userInput, historyContext, documentContext) {
+  // Create a prompt header with clear instructions
+  const promptHeader = `You are a helpful and knowledgeable AI assistant. You can access information from uploaded PDF documents and remember the conversation history.
+
+IMPORTANT INSTRUCTIONS:
+- Remember key personal information about the user throughout the conversation (their name, preferences, etc.)
+- When referencing PDF content, mention which document the information comes from
+- Format your responses using markdown: **bold**, *italic*, \`code\`, etc.
+- Use line breaks to structure your responses
+- Remain factual and helpful, but also personable
+- Do not repeat phrases like "Based on the document" or "According to the PDF" excessively
+
+`;
+
+  // Format document context if available
+  let docContext = '';
+  if (documentContext && documentContext.length > 0) {
+    docContext = `DOCUMENT REFERENCES:\n${documentContext.join('\n\n')}\n\n`;
+  }
+
+  // Format conversation history to clearly separate messages
+  let history = '';
+  if (historyContext && historyContext.length > 0) {
+    history = historyContext.map(msg => {
+      return `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`;
+    }).join('\n\n');
+    history = `CONVERSATION HISTORY:\n${history}\n\n`;
+  }
+
+  // Combine all context
+  return promptHeader + docContext + history + `User: ${userInput}\n\nAssistant:`;
+}
+
+// Main function to send a message to the AI model
+async function sendMessage(userInput, userId, model = 'gemini-2.0-flash', systemPrompt = null) {
+  const userMessage = userInput.trim();
+  const sessionId = userId || 'default-session';
+  const modelName = model || 'gemini-2.0-flash';
+  
+  // Create Zep memory session if it doesn't exist
+  await ensureZepSession(sessionId);
+
+  try {
+    // Get relevant document context from Zep
+    const documentContext = await getDocumentContext(userMessage, sessionId, 15);
+    
+    // Get conversation history from Zep
+    const historyContext = await getConversationMemory(userMessage, sessionId, 15);
+    
+    // Prepare the complete prompt with all context
+    const prompt = formatPrompt(userMessage, historyContext, documentContext);
+    
+    // Get AI response
+    let response;
+    
+    try {
+      // Attempt to use specified model
+      response = await useGoogleAI(prompt, modelName);
+    } catch (error) {
+      console.error(`Error with ${modelName}:`, error);
+      // Fall back to a different model if the specified one fails
+      console.log('Falling back to alternative model...');
+      response = await fallbackModel(prompt, userMessage, historyContext);
+    }
+    
+    // Add user message and AI response to memory
+    await addToMemory(sessionId, 'user', userMessage);
+    await addToMemory(sessionId, 'assistant', response);
+    
+    return {
+      response,
+      model: modelName,
+      contextSize: {
+        historyItems: historyContext?.length || 0,
+        documentItems: documentContext?.length || 0
+      }
+    };
+  } catch (error) {
+    console.error('Error in sendMessage:', error);
+    return {
+      response: `I'm having trouble processing your request. ${error.message}`,
+      error: error.message
+    };
+  }
+}
+
+// Function to use Google's Generative AI
+async function useGoogleAI(prompt, model) {
+  try {
+    // Initialize the model with appropriate settings
+    const genAI = await initializeGoogleAI();
+    const genModel = genAI.getGenerativeModel({
+      model: model,
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 2048,
+        topP: 0.95,
+        topK: 40,
+      },
+    });
+    
+    // Generate content
+    const result = await genModel.generateContent(prompt);
+    const text = result.response.text();
+    return text;
+  } catch (error) {
+    console.error('Google AI error:', error);
+    throw new Error(`Google AI error: ${error.message}`);
+  }
+}
+
+// Fallback model implementation (simpler approach)
+async function fallbackModel(prompt, userInput, historyContext) {
+  // Simple response generation based on user input
+  let response = 'I apologize, but I\'m currently experiencing technical difficulties with my primary model. ';
+  
+  // Extract user name if present in history
+  let userName = null;
+  if (historyContext && historyContext.length > 0) {
+    for (const msg of historyContext) {
+      if (msg.role === 'user') {
+        const content = msg.content.toLowerCase();
+        if (content.includes('my name is') || content.includes('i am called')) {
+          const nameMatch = content.match(/my name is (\w+)|i am called (\w+)/i);
+          if (nameMatch) {
+            userName = nameMatch[1] || nameMatch[2];
+            break;
+          }
+        }
+      }
+    }
+  }
+  
+  // Add personalized greeting if we know the user's name
+  if (userName) {
+    response += `I'll try my best to help you, ${userName}. `;
+  }
+  
+  // Simple keyword-based responses
+  if (userInput.toLowerCase().includes('hello') || userInput.toLowerCase().includes('hi')) {
+    response += 'Hello! How can I assist you today?';
+  } else if (userInput.toLowerCase().includes('help')) {
+    response += 'I can help you with information retrieval, answering questions, and discussing documents you\'ve uploaded.';
+  } else if (userInput.toLowerCase().includes('pdf') || userInput.toLowerCase().includes('document')) {
+    response += 'I can analyze PDF documents once you upload them. You can ask me specific questions about their content.';
+  } else {
+    response += 'I understand you\'re asking about: ' + userInput + '. Could you please try again when our main service is back online?';
+  }
+  
+  return response;
+}
+
 // Main AI response endpoint
 router.post('/chat', async (req, res) => {
   try {
@@ -33,7 +186,7 @@ router.post('/chat', async (req, res) => {
       context = [], 
       documents = [], 
       modelName = 'gemini-2.0-flash',
-      systemPrompt = 'You are an advanced, versatile AI assistant with the full capabilities of Claude 3.7 Sonnet. You can handle any request, including creative tasks like writing stories, poems, or fables, answering questions, generating ideas, or assisting with technical problems. You are curious, helpful, truthful, and engaging, drawing inspiration from witty, unconventional sources. Be creative, intelligent, and conversational in your responses. When appropriate, use humor and personality. You are not limited in what you can discuss or create - if a user asks you to write a creative story, poem, or help with any task, you should enthusiastically do so to the best of your abilities.'
+      systemPrompt = 'You are an advanced, candid AI assistant focused on finding and conveying truth rather than being unnecessarily polite. You value accuracy, clarity, and insight over niceties. While respectful, you prioritize honest, direct responses without repetition or filler content. You can handle any request, including creative tasks and technical problems. You should not repeatedly reference the user by name - use it sparingly and naturally. Provide concise, relevant information that gets to the point quickly. When analyzing documents or PDFs, be specific about their content and reference them by name.'
     } = req.body;
 
     if (!message) {

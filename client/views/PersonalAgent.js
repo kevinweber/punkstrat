@@ -13,23 +13,35 @@ const STATUS_ENDPOINT = `${AI_API_URL}/status`;
 // Fixed user ID (in a real app, this would come from authentication)
 const USER_ID = 'user1';
 
-// Simple markdown-like formatting helper
-const formatMessage = (text) => {
-  if (!text) return '';
+// Format message with support for Markdown-like syntax and line breaks
+const formatMessage = (message) => {
+  if (!message) return '';
   
   // Replace line breaks with <br> tags
-  let formatted = text.replace(/\n/g, '<br>');
+  let formatted = message.replace(/\n/g, '<br>');
   
-  // Bold text (** or __)
-  formatted = formatted.replace(/(\*\*|__)(.*?)\1/g, '<strong>$2</strong>');
+  // Bold text
+  formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
   
-  // Italic text (* or _)
-  formatted = formatted.replace(/(\*|_)(.*?)\1/g, '<em>$2</em>');
+  // Italic text
+  formatted = formatted.replace(/\*(.*?)\*/g, '<em>$1</em>');
   
   // Code blocks
-  formatted = formatted.replace(/`([^`]+)`/g, '<code>$1</code>');
+  formatted = formatted.replace(/```(.*?)```/gs, '<pre><code>$1</code></pre>');
+  
+  // Inline code
+  formatted = formatted.replace(/`(.*?)`/g, '<code>$1</code>');
   
   return formatted;
+};
+
+// Check if a message contains personal information that should be flagged as important
+const isImportant = (message) => {
+  const content = message.content.toLowerCase();
+  return content.includes('my name is') || 
+         content.includes('i am called') || 
+         content.includes('i\'m called') ||
+         content.includes('call me');
 };
 
 // Load PDF.js (we'll add this to the HTML file)
@@ -55,6 +67,7 @@ export default function PersonalAgent() {
   const [uploadedPdfs, setUploadedPdfs] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
   const [selectedModel, setSelectedModel] = useState('gemini-2.0-flash');
+  const [dragActive, setDragActive] = useState(false);
 
   // Refs
   const messagesEndRef = useRef(null);
@@ -74,12 +87,19 @@ export default function PersonalAgent() {
         await loadPdfJs();
         // Load list of previously uploaded PDFs
         await loadUploadedPdfs();
+        // Setup drag-and-drop listeners for file uploads
+        setupDragAndDrop();
       } catch (error) {
         console.error('Error initializing:', error);
       }
     }
 
     initializeAgent();
+
+    // Cleanup function to remove drag-and-drop listeners
+    return () => {
+      cleanupDragAndDrop();
+    };
   }, []);
 
   // Scroll to bottom of messages when messages change
@@ -294,7 +314,7 @@ export default function PersonalAgent() {
           metadata: {
             role,
             timestamp: new Date().toISOString(),
-            isImportant: text.toLowerCase().includes('my name is') || text.toLowerCase().includes('i am called'), // Mark introduction as important
+            isImportant: isImportant(text) || text.toLowerCase().includes('my name is') || text.toLowerCase().includes('i am called'), // Mark introduction and important messages as important
             ...additionalMetadata
           }
         })
@@ -393,13 +413,13 @@ export default function PersonalAgent() {
         : '';
       
       // Create a more informative system message about available context
-      const enhancedSystemPrompt = `You are an advanced, versatile AI assistant for the PunkStrat website. 
+      const enhancedSystemPrompt = `You are an advanced, candid AI assistant for the PunkStrat website.
 You have access to user conversation history and any uploaded document context.
-You can handle any request, including creative writing like stories, poems, fables, and more.
-Always remember user details like their name, preferences, and other personal information they share.
+Your goal is to provide accurate, direct information without unnecessary politeness or repetition.
+When referencing documents, be specific about their content and mention them by name.
 ${personalInfo.length > 0 ? 'IMPORTANT USER INFORMATION:\n' + personalInfo.join('\n') + '\n\n' : ''}
-Please use the provided PDF document context when answering questions about uploaded documents.${contextInfo}
-You have the full capabilities of Claude 3.7 Sonnet and should be creative, helpful, and engaging in your responses.`;
+${relevantContext.length > 0 ? `IMPORTANT: The following documents are available for reference. When answering questions about them, cite them by name and provide specific details from their content:${contextInfo}` : ''}
+You can handle any request, including creative writing or technical questions, but always prioritize truth and clarity over being nice.`;
       
       const response = await fetch(`${AI_API_URL}/chat`, {
         method: 'POST',
@@ -525,9 +545,81 @@ You have the full capabilities of Claude 3.7 Sonnet and should be creative, help
     }
   };
 
+  // Setup drag-and-drop event listeners
+  const setupDragAndDrop = () => {
+    const container = document.querySelector('.personal-agent-container');
+    if (!container) return;
+
+    const handleDragOver = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      container.classList.add('drag-over');
+    };
+
+    const handleDragLeave = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      container.classList.remove('drag-over');
+    };
+
+    const handleDrop = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      container.classList.remove('drag-over');
+
+      if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+        // Process the dropped files
+        handleFiles(e.dataTransfer.files);
+      }
+    };
+
+    container.addEventListener('dragover', handleDragOver);
+    container.addEventListener('dragleave', handleDragLeave);
+    container.addEventListener('drop', handleDrop);
+
+    // Store event listeners in window for cleanup
+    window._dragDropListeners = {
+      container,
+      handleDragOver,
+      handleDragLeave,
+      handleDrop
+    };
+  };
+
+  // Cleanup drag-and-drop event listeners
+  const cleanupDragAndDrop = () => {
+    if (window._dragDropListeners) {
+      const { container, handleDragOver, handleDragLeave, handleDrop } = window._dragDropListeners;
+      container.removeEventListener('dragover', handleDragOver);
+      container.removeEventListener('dragleave', handleDragLeave);
+      container.removeEventListener('drop', handleDrop);
+      delete window._dragDropListeners;
+    }
+  };
+
+  // Process uploaded files
+  const handleFiles = (files) => {
+    const pdfFiles = Array.from(files).filter(file => file.type === 'application/pdf');
+    
+    if (pdfFiles.length === 0) {
+      setMessages(prev => [
+        ...prev, 
+        { 
+          role: 'system', 
+          content: 'Only PDF files are supported. Please upload PDF files only.' 
+        }
+      ]);
+      return;
+    }
+    
+    if (pdfFiles.length > 0) {
+      handleFileUpload({ target: { files } });
+    }
+  };
+
   // Render the component
   return html`
-    <div class="personal-agent-container">
+    <div class="personal-agent-container ${dragActive ? 'drag-active' : ''}">
       <h1 class="title">Personal AI Agent</h1>
       <p>
         <span class="highlight">
@@ -616,10 +708,10 @@ You have the full capabilities of Claude 3.7 Sonnet and should be creative, help
             <ul>
               ${uploadedPdfs.map(pdf => html`
                 <li>
-                  ${pdf.name} (${pdf.chunks} chunks)
+                  ${pdf.name || pdf.filename} (${pdf.chunks} chunks, ${pdf.pages || '?'} pages)
                   <button 
                     class="delete-pdf-button" 
-                    onClick=${() => handleDeletePdf(pdf.name)}
+                    onClick=${() => handleDeletePdf(pdf.name || pdf.filename)}
                     title="Delete this PDF"
                   >
                     ×
@@ -639,4 +731,4 @@ You have the full capabilities of Claude 3.7 Sonnet and should be creative, help
       <${LogoLinkHome}/>
     </div>
   `;
-} 
+}
