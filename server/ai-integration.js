@@ -14,13 +14,27 @@ const getGoogleAI = () => {
   return new GoogleGenerativeAI(apiKey);
 };
 
-// Remove the models endpoint since it's not supported
-// router.get('/models', async (req, res) => { ... });
+// Available models
+const AVAILABLE_MODELS = {
+  'gemini-1.5-flash': 'Gemini 1.5 Flash',
+  'gemini-1.5-pro': 'Gemini 1.5 Pro',
+  'gemini-2.0-flash': 'Gemini 2.0 Flash',
+};
+
+// Fallback model if requested model is not available
+const FALLBACK_MODEL = 'gemini-1.5-flash';
 
 // Main AI response endpoint
 router.post('/chat', async (req, res) => {
   try {
-    const { message, userId, context = [], documents = [], modelName = 'gemini-1.5-flash' } = req.body;
+    const { 
+      message, 
+      userId, 
+      context = [], 
+      documents = [], 
+      modelName = 'gemini-1.5-flash',
+      systemPrompt = 'You are a helpful assistant for the PunkStrat website.'
+    } = req.body;
 
     if (!message) {
       return res.status(400).json({ error: 'Message is required' });
@@ -35,44 +49,96 @@ router.post('/chat', async (req, res) => {
       });
     }
 
-    // Allow model selection from client with fallback
-    const model = genAI.getGenerativeModel({ model: modelName });
+    // Try to use requested model, fall back to default if not available
+    let selectedModel = modelName;
+    if (!Object.keys(AVAILABLE_MODELS).includes(selectedModel)) {
+      console.warn(`Model ${selectedModel} not found, using fallback ${FALLBACK_MODEL}`);
+      selectedModel = FALLBACK_MODEL;
+    }
 
-    // Prepare any document references
-    const systemPrompt = documents.length > 0 ?
-      `You are a helpful assistant. You have access to the following information extracted from user documents:\n\n${documents.join('\n\n')}\n\nUse this information to help answer the user's questions when relevant.` :
-      'You are a helpful assistant for the PunkStrat website.';
+    try {
+      // Try to initialize the model
+      const model = genAI.getGenerativeModel({ 
+        model: selectedModel,
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 2048,
+          topP: 0.95,
+          topK: 40,
+        }
+      });
+      
+      // Prepare comprehensive context from documents
+      let documentContext = '';
+      if (documents && documents.length > 0) {
+        // Limit document context to avoid exceeding token limits
+        const maxDocs = Math.min(documents.length, 15);
+        documentContext = `\n\nRELEVANT INFORMATION:\n${documents.slice(0, maxDocs).join('\n\n')}`;
+      }
+      
+      // Format conversation history in a simple text format with clear role distinctions
+      const historyText = context.length > 0 
+        ? context.map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.parts[0].text}`).join('\n\n') 
+        : '';
+        
+      // Combine all context into a single prompt with enhanced instructions
+      const fullPrompt = `${systemPrompt}
 
-    // Add system prompt to the beginning of history if available
-    const history = context.length > 0 ? context.map(msg => ({
-      role: msg.role === 'user' ? 'user' : 'model',
-      parts: [{ text: msg.content }]
-    })) : [];
+IMPORTANT: 
+1. Remember key personal information about the user throughout the conversation, such as their name, preferences, or any personal details they share. If asked about previously mentioned information, refer back to it accurately.
+2. You can use markdown formatting in your responses:
+   - Use **bold** for emphasis
+   - Use *italics* for subtle emphasis
+   - Use \`code\` for technical terms
+   - Use line breaks to structure your response
 
-    // Create a chat session
-    const chat = model.startChat({
-      history,
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 2048,
-      },
-    });
+${documentContext}
 
-    // Generate a response
-    const result = await chat.sendMessage([
-      ...(history.length === 0 ? [{ text: systemPrompt, role: 'model' }] : []),
-      { text: message }
-    ]);
-    const response = result.response;
-    const text = response.text();
-
-    // Return the AI response
-    res.json({
-      success: true,
-      response: text,
-      model: modelName
-    });
-
+${historyText.length > 0 ? 'Previous conversation:\n' + historyText + '\n\n' : ''}
+User: ${message}
+Assistant:`;
+      
+      // Generate content with the combined prompt
+      const result = await model.generateContent(fullPrompt);
+      const response = result.response;
+      const text = response.text();
+      
+      // Return the AI response
+      res.json({
+        success: true,
+        response: text,
+        model: selectedModel,
+        contextSize: {
+          historyItems: context.length,
+          documentItems: documents.length,
+          usedDocuments: documentContext ? Math.min(documents.length, 15) : 0
+        }
+      });
+    } catch (modelError) {
+      console.error('Model error:', modelError);
+      
+      // If the selected model fails, fall back to the most stable model
+      if (selectedModel !== FALLBACK_MODEL) {
+        console.log(`Falling back to ${FALLBACK_MODEL} after error with ${selectedModel}`);
+        const fallbackModel = genAI.getGenerativeModel({ model: FALLBACK_MODEL });
+        
+        // Create a simple chat with just the essential context
+        const fallbackResult = await fallbackModel.generateContent(
+          `You are a helpful assistant. Remember that the user's name is ${userId}. The user asked: ${message}`
+        );
+        
+        const fallbackText = fallbackResult.response.text();
+        
+        res.json({
+          success: true,
+          response: fallbackText + '\n\n(Note: I had to use a fallback model due to an issue with your selected model.)',
+          model: FALLBACK_MODEL + ' (fallback)',
+        });
+      } else {
+        // If even the fallback model fails, throw the error
+        throw modelError;
+      }
+    }
   } catch (error) {
     console.error('AI API error:', error);
     res.status(500).json({
@@ -87,13 +153,18 @@ router.get('/status', async (req, res) => {
   try {
     const apiKey = process.env.GOOGLE_AI_API_KEY;
     const isConfigured = !!apiKey;
+    
+    // Check for model availability (we don't actually check, just report our supported models)
+    const availableModels = Object.keys(AVAILABLE_MODELS);
 
     res.json({
       success: true,
       status: {
         isConfigured,
-        service: 'Google AI (Gemini 1.5 Flash)',
-        ready: isConfigured
+        service: 'Google AI (Gemini Models)',
+        ready: isConfigured,
+        supportedModels: availableModels,
+        defaultModel: 'gemini-2.0-flash'
       }
     });
   } catch (error) {

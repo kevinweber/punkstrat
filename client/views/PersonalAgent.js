@@ -13,6 +13,25 @@ const STATUS_ENDPOINT = `${AI_API_URL}/status`;
 // Fixed user ID (in a real app, this would come from authentication)
 const USER_ID = 'user1';
 
+// Simple markdown-like formatting helper
+const formatMessage = (text) => {
+  if (!text) return '';
+  
+  // Replace line breaks with <br> tags
+  let formatted = text.replace(/\n/g, '<br>');
+  
+  // Bold text (** or __)
+  formatted = formatted.replace(/(\*\*|__)(.*?)\1/g, '<strong>$2</strong>');
+  
+  // Italic text (* or _)
+  formatted = formatted.replace(/(\*|_)(.*?)\1/g, '<em>$2</em>');
+  
+  // Code blocks
+  formatted = formatted.replace(/`([^`]+)`/g, '<code>$1</code>');
+  
+  return formatted;
+};
+
 // Load PDF.js (we'll add this to the HTML file)
 const loadPdfJs = async () => {
   if (window.pdfjsLib) return window.pdfjsLib;
@@ -53,6 +72,8 @@ export default function PersonalAgent() {
         await loadHistory();
         // Load PDF.js library
         await loadPdfJs();
+        // Load list of previously uploaded PDFs
+        await loadUploadedPdfs();
       } catch (error) {
         console.error('Error initializing:', error);
       }
@@ -81,14 +102,81 @@ export default function PersonalAgent() {
     }
   };
 
-  // Load conversation history
+  // Load conversation history from Zep memory
   const loadHistory = async () => {
     try {
-      setMessages([
-        { role: 'system', content: 'Welcome to your personal AI assistant powered by Google Gemini. I can help answer questions and have conversations with you.' }
-      ]);
+      // Welcome message
+      const welcomeMessage = { 
+        role: 'system', 
+        content: 'Welcome to your personal AI assistant powered by Google Gemini. I can help answer questions and have conversations with you.' 
+      };
+      
+      // Try to fetch recent conversation history
+      try {
+        const response = await fetch(`${API_BASE_URL}/memory?userId=${USER_ID}&limit=10&source=conversation`);
+        if (response.ok) {
+          const data = await response.json();
+          
+          if (data.results && data.results.length > 0) {
+            // Sort by timestamp (oldest first)
+            const sortedResults = data.results
+              .filter(item => item.metadata && item.metadata.timestamp)
+              .sort((a, b) => new Date(a.metadata.timestamp) - new Date(b.metadata.timestamp));
+            
+            // Recreate conversation from memory
+            const historyMessages = sortedResults.map(item => ({
+              role: item.metadata.role || 'user',
+              content: item.content
+            }));
+            
+            // Add welcome message at the beginning if not empty
+            setMessages([welcomeMessage, ...historyMessages]);
+            
+            // Also update the conversation history ref
+            conversationHistory.current = historyMessages;
+            
+            console.log(`Loaded ${historyMessages.length} messages from memory`);
+            return;
+          }
+        }
+      } catch (error) {
+        console.warn('Error loading history from memory:', error);
+      }
+      
+      // Fallback to just welcome message if no history or error
+      setMessages([welcomeMessage]);
     } catch (error) {
       console.error('Error loading history:', error);
+      setMessages([{ 
+        role: 'system', 
+        content: 'Welcome to your personal AI assistant. I can help answer questions and have conversations with you.' 
+      }]);
+    }
+  };
+
+  // Load previously uploaded PDFs
+  const loadUploadedPdfs = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/pdfs?userId=${USER_ID}`);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.pdfs && data.pdfs.length > 0) {
+          setUploadedPdfs(data.pdfs);
+          
+          // Add a system message about available PDFs if any exist
+          if (data.pdfs.length > 0) {
+            setMessages(prev => [
+              ...prev, 
+              { 
+                role: 'system', 
+                content: `You have ${data.pdfs.length} previously uploaded PDF document${data.pdfs.length > 1 ? 's' : ''} available. You can ask questions about the content.` 
+              }
+            ]);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error loading PDF list:', error);
     }
   };
 
@@ -206,6 +294,7 @@ export default function PersonalAgent() {
           metadata: {
             role,
             timestamp: new Date().toISOString(),
+            isImportant: text.toLowerCase().includes('my name is') || text.toLowerCase().includes('i am called'), // Mark introduction as important
             ...additionalMetadata
           }
         })
@@ -223,26 +312,93 @@ export default function PersonalAgent() {
   // Process message using Google AI API
   const processMessage = async (userMessage) => {
     try {
-      // Update conversation history for context
-      if (conversationHistory.current.length > 10) {
-        // Keep only the last 10 messages to avoid context length issues
-        conversationHistory.current = conversationHistory.current.slice(-10);
+      // We no longer limit the conversation history to 10 messages
+      // This ensures the AI has access to the full conversation context
+      
+      // First, search specifically for important personal information
+      let personalInfo = [];
+      try {
+        // Look for any messages where the user introduced themselves
+        const personalInfoResponse = await fetch(`${API_BASE_URL}/memory?userId=${USER_ID}&source=conversation`);
+        if (personalInfoResponse.ok) {
+          const data = await personalInfoResponse.json();
+          if (data.results && data.results.length > 0) {
+            // Filter for messages containing personal information
+            personalInfo = data.results
+              .filter(item => 
+                item.metadata?.isImportant === true || 
+                item.content.toLowerCase().includes('my name is') ||
+                item.content.toLowerCase().includes('i am called')
+              )
+              .map(item => {
+                const role = item.metadata?.role === 'user' ? 'User' : 'Assistant';
+                return `${role}: ${item.content}`;
+              });
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to retrieve personal information:', error);
       }
-
-      // Search Zep memory for relevant context
+      
+      // Search Zep memory for relevant context - increase retrieval limit for better recall
       let relevantContext = [];
       try {
-        const searchResponse = await fetch(`${API_BASE_URL}/memory?userId=${USER_ID}&query=${encodeURIComponent(userMessage)}&limit=5`);
-        if (searchResponse.ok) {
-          const data = await searchResponse.json();
+        // First get document context (PDF knowledge)
+        const docSearchResponse = await fetch(`${API_BASE_URL}/memory?userId=${USER_ID}&query=${encodeURIComponent(userMessage)}&limit=15&source=pdf`);
+        if (docSearchResponse.ok) {
+          const data = await docSearchResponse.json();
           if (data.results && data.results.length > 0) {
-            relevantContext = data.results.map(item => item.content);
+            // Add document source metadata to each item
+            relevantContext = data.results.map(item => {
+              const source = item.metadata?.filename ? `[Source: ${item.metadata.filename}]` : '';
+              return `${source} ${item.content}`;
+            });
+          }
+        }
+        
+        // Then get conversation memory context - increase limit for better recall
+        const convSearchResponse = await fetch(`${API_BASE_URL}/memory?userId=${USER_ID}&query=${encodeURIComponent(userMessage)}&limit=15&source=conversation`);
+        if (convSearchResponse.ok) {
+          const data = await convSearchResponse.json();
+          if (data.results && data.results.length > 0) {
+            // Add conversation context but prevent duplicates with current history
+            const existingContent = new Set(conversationHistory.current.map(msg => msg.content));
+            const uniqueConvContext = data.results
+              .filter(item => !existingContent.has(item.content))
+              .map(item => {
+                // Add role information if available
+                const role = item.metadata?.role ? `[${item.metadata.role}] ` : '';
+                return `${role}${item.content}`;
+              });
+            
+            // Add to relevant context if unique
+            if (uniqueConvContext.length > 0) {
+              relevantContext = [...relevantContext, ...uniqueConvContext];
+            }
           }
         }
       } catch (error) {
         console.warn('Failed to search memory for context:', error);
       }
-
+      
+      // Prepare history in the format expected by the AI - include all history
+      const formattedHistory = conversationHistory.current.map(msg => ({
+        role: msg.role === 'user' ? 'user' : 'assistant',
+        parts: [{ text: msg.content }]
+      }));
+      
+      // Enhance context management with metadata
+      const contextInfo = relevantContext.length > 0 
+        ? `\n\nKnowledge context: ${relevantContext.length} relevant items found` 
+        : '';
+      
+      // Create a more informative system message about available context
+      const enhancedSystemPrompt = `You are a helpful assistant for the PunkStrat website. 
+You have access to user conversation history and any uploaded document context.
+Always remember user details like their name, preferences, and other personal information they share.
+${personalInfo.length > 0 ? 'IMPORTANT USER INFORMATION:\n' + personalInfo.join('\n') + '\n\n' : ''}
+Please use the provided PDF document context when answering questions about uploaded documents.${contextInfo}`;
+      
       const response = await fetch(`${AI_API_URL}/chat`, {
         method: 'POST',
         headers: {
@@ -251,17 +407,18 @@ export default function PersonalAgent() {
         body: JSON.stringify({
           message: userMessage,
           userId: USER_ID,
-          context: conversationHistory.current,
+          context: formattedHistory,
           documents: relevantContext,
-          modelName: selectedModel
+          modelName: selectedModel,
+          systemPrompt: enhancedSystemPrompt
         })
       });
-
+      
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.details || 'AI service error');
       }
-
+      
       const data = await response.json();
       return data.response;
     } catch (error) {
@@ -308,6 +465,64 @@ export default function PersonalAgent() {
     setIsLoading(false);
   };
 
+  // Delete a PDF and its chunks from memory
+  const handleDeletePdf = async (filename) => {
+    if (!window.confirm(`Are you sure you want to delete "${filename}"? This cannot be undone.`)) {
+      return;
+    }
+    
+    try {
+      const response = await fetch(`${API_BASE_URL}/pdfs/${encodeURIComponent(filename)}?userId=${USER_ID}`, {
+        method: 'DELETE'
+      });
+      
+      if (response.ok) {
+        // Remove from the list of uploaded PDFs
+        setUploadedPdfs(prev => prev.filter(pdf => pdf.name !== filename));
+        
+        // Notify the user
+        setMessages(prev => [...prev, {
+          role: 'system',
+          content: `Deleted "${filename}" from memory.`
+        }]);
+      } else {
+        throw new Error('Failed to delete PDF');
+      }
+    } catch (error) {
+      console.error('Error deleting PDF:', error);
+      setMessages(prev => [...prev, {
+        role: 'system',
+        content: `Error deleting PDF: ${error.message}`
+      }]);
+    }
+  };
+
+  // Clear all conversation history
+  const handleClearHistory = async () => {
+    if (!window.confirm('Are you sure you want to clear your conversation history? This cannot be undone.')) {
+      return;
+    }
+    
+    try {
+      // We don't have a bulk delete endpoint, so we'll just reset the UI state
+      // In a real app, you would delete all conversation items from memory
+      
+      // Keep only the welcome message
+      const welcomeMessage = { 
+        role: 'system', 
+        content: 'Conversation history cleared. How can I help you today?' 
+      };
+      
+      setMessages([welcomeMessage]);
+      conversationHistory.current = [];
+      
+      // Notify that we're having a fresh start
+      console.log('Conversation history cleared');
+    } catch (error) {
+      console.error('Error clearing history:', error);
+    }
+  };
+
   // Render the component
   return html`
     <div class="personal-agent-container">
@@ -320,23 +535,32 @@ export default function PersonalAgent() {
         </span>
       </p>
       
-      <div class="model-selector">
-        <label for="model-select">AI Model:</label>
-        <select 
-          id="model-select" 
-          value=${selectedModel} 
-          onChange=${e => setSelectedModel(e.target.value)}
+      <div class="control-panel">
+        <div class="model-selector">
+          <label for="model-select">AI Model:</label>
+          <select 
+            id="model-select" 
+            value=${selectedModel} 
+            onChange=${e => setSelectedModel(e.target.value)}
+          >
+            <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+            <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+            <option value="gemini-2.0-flash">Gemini 2.0 Flash Light</option>
+          </select>
+        </div>
+        
+        <button 
+          class="clear-history-button" 
+          onClick=${handleClearHistory}
         >
-          <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
-          <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
-          <option value="gemini-2.0-flash">Gemini 2.0 Flash Light</option>
-        </select>
+          Clear History
+        </button>
       </div>
       
       <div class="conversation-box">
         ${messages.map(message => html`
           <div class="message ${message.role}">
-            <div class="message-content">${message.content}</div>
+            <div class="message-content" dangerouslySetInnerHTML=${{ __html: formatMessage(message.content) }}></div>
           </div>
         `)}
         ${isLoading && html`
@@ -389,7 +613,16 @@ export default function PersonalAgent() {
             <p>Uploaded PDFs:</p>
             <ul>
               ${uploadedPdfs.map(pdf => html`
-                <li>${pdf.name} (${pdf.pages} pages, ${pdf.chunks} chunks)</li>
+                <li>
+                  ${pdf.name} (${pdf.chunks} chunks)
+                  <button 
+                    class="delete-pdf-button" 
+                    onClick=${() => handleDeletePdf(pdf.name)}
+                    title="Delete this PDF"
+                  >
+                    ×
+                  </button>
+                </li>
               `)}
             </ul>
           </div>
@@ -398,6 +631,7 @@ export default function PersonalAgent() {
       
       <p class="footer-note">
         This AI chat is powered by Google's Gemini models with PDF knowledge base support.
+        Your conversation history and document knowledge are stored using Zep memory.
       </p>
       
       <${LogoLinkHome}/>
