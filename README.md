@@ -7,6 +7,20 @@
 * Then add a route to `client/index.js` pointing to the respective view file that includes the content for the page.
 * If DevTools during development show "404 (Not Found)" for a page but the content is still shown, it likely means that there's no matching HTML file for the current URL and GitHub Pages will show a 404 once the code is deployed.
 
+## Personal AI Agent
+
+The site includes a simple personal AI agent demo page:
+
+* The agent uses an in-memory storage solution to maintain conversation history
+* The current implementation generates random responses from a predefined set
+* The application maintains a consistent design language with the main site
+* To integrate with a real AI service, update the `processMessage` function in `client/views/PersonalAgent.js`
+
+The personal agent can be accessed at `/personal-agent` and supports:
+* Text conversations
+* PDF document uploads (for potential knowledge base integration)
+* Message history stored during the server session
+
 ## Dev notes
 
 * Run `npm install` to get the latest NPM dependencies.
