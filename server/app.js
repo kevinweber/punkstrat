@@ -20,7 +20,7 @@ app.use(express.json()); // For parsing application/json
 
 // API routes
 app.use('/api/zep', zepIntegration);
-app.use('/api/ai', aiIntegration);
+app.use('/api/ai', aiIntegration.router);
 
 // CORS headers for development
 if (IS_DEV) {

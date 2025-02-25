@@ -24,6 +24,54 @@ const AVAILABLE_MODELS = {
 // Fallback model if requested model is not available
 const FALLBACK_MODEL = 'gemini-2.0-flash';
 
+// Generate a summary of document content
+async function generateSummary(documentContent, documentName) {
+  try {
+    const genAI = getGoogleAI();
+    if (!genAI) {
+      return { summary: 'Automatic summary unavailable: AI service not configured' };
+    }
+    
+    const model = genAI.getGenerativeModel({ 
+      model: 'gemini-2.0-flash', // Use the fastest model for summaries 
+      generationConfig: {
+        temperature: 0.2, // Lower temperature for more factual summaries
+        maxOutputTokens: 2048, // Allow for detailed summaries
+        topP: 0.95,
+        topK: 40,
+      }
+    });
+    
+    // Create a prompt for summarizing the document
+    const prompt = `Please provide a detailed summary of the following document: "${documentName}".
+    
+Focus on extracting the most important information, key points, and main topics covered in the document.
+Format your summary as bullet points of the main themes followed by a short paragraph overview.
+Be comprehensive but concise.
+
+DOCUMENT CONTENT:
+${documentContent}
+
+DETAILED SUMMARY:`;
+    
+    const result = await model.generateContent(prompt);
+    const summary = result.response.text();
+    
+    return { 
+      success: true, 
+      summary: summary,
+      model: 'gemini-2.0-flash'
+    };
+  } catch (error) {
+    console.error('Error generating document summary:', error);
+    return { 
+      success: false, 
+      summary: `Failed to automatically summarize document: ${error.message}`,
+      error: error.message
+    };
+  }
+}
+
 // Function to format prompt with all necessary context and instructions
 function formatPrompt(userInput, historyContext, documentContext) {
   // Create a prompt header with clear instructions
@@ -58,49 +106,61 @@ IMPORTANT INSTRUCTIONS:
   return promptHeader + docContext + history + `User: ${userInput}\n\nAssistant:`;
 }
 
-// Main function to send a message to the AI model
+// Use Google AI to generate a response (not a React hook)
+async function generateAIResponse(prompt, model) {
+  try {
+    // Initialize the model with appropriate settings
+    const genAI = getGoogleAI();
+    if (!genAI) {
+      throw new Error('AI service not configured');
+    }
+    
+    const genModel = genAI.getGenerativeModel({
+      model: model,
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 4096, // Increased token limit for more complete responses
+        topP: 0.95,
+        topK: 40,
+      },
+    });
+    
+    // Generate content
+    const result = await genModel.generateContent(prompt);
+    const text = result.response.text();
+    return text;
+  } catch (error) {
+    console.error('Google AI error:', error);
+    throw new Error(`Google AI error: ${error.message}`);
+  }
+}
+
+// Simplified sendMessage function without reliance on Zep-specific functions
 async function sendMessage(userInput, userId, model = 'gemini-2.0-flash', systemPrompt = null) {
   const userMessage = userInput.trim();
   const sessionId = userId || 'default-session';
   const modelName = model || 'gemini-2.0-flash';
-  
-  // Create Zep memory session if it doesn't exist
-  await ensureZepSession(sessionId);
 
   try {
-    // Get relevant document context from Zep
-    const documentContext = await getDocumentContext(userMessage, sessionId, 15);
-    
-    // Get conversation history from Zep
-    const historyContext = await getConversationMemory(userMessage, sessionId, 15);
-    
-    // Prepare the complete prompt with all context
-    const prompt = formatPrompt(userMessage, historyContext, documentContext);
+    // Prepare the prompt with basic instructions
+    const basicPrompt = `${systemPrompt || 'You are a helpful AI assistant.'}\n\nUser: ${userInput}\n\nAssistant:`;
     
     // Get AI response
     let response;
     
     try {
       // Attempt to use specified model
-      response = await useGoogleAI(prompt, modelName);
+      response = await generateAIResponse(basicPrompt, modelName);
     } catch (error) {
       console.error(`Error with ${modelName}:`, error);
       // Fall back to a different model if the specified one fails
       console.log('Falling back to alternative model...');
-      response = await fallbackModel(prompt, userMessage, historyContext);
+      response = await fallbackModel(basicPrompt, userMessage, []);
     }
-    
-    // Add user message and AI response to memory
-    await addToMemory(sessionId, 'user', userMessage);
-    await addToMemory(sessionId, 'assistant', response);
     
     return {
       response,
-      model: modelName,
-      contextSize: {
-        historyItems: historyContext?.length || 0,
-        documentItems: documentContext?.length || 0
-      }
+      model: modelName
     };
   } catch (error) {
     console.error('Error in sendMessage:', error);
@@ -215,18 +275,36 @@ router.post('/chat', async (req, res) => {
         model: selectedModel,
         generationConfig: {
           temperature: 0.7,
-          maxOutputTokens: 2048,
+          maxOutputTokens: 4096,  // Increased to 4096 for complete answers
           topP: 0.95,
           topK: 40,
         }
       });
       
+      // Check if this is a document analysis request
+      const isDocumentAnalysis = documents && documents.length > 0 && 
+        (message.toLowerCase().includes('analyze') || 
+         message.toLowerCase().includes('summarize') || 
+         message.toLowerCase().includes('tell me about') ||
+         message.toLowerCase().includes('what is in') ||
+         message.toLowerCase().includes('what does') ||
+         message.toLowerCase().includes('content of'));
+      
       // Prepare comprehensive context from documents
       let documentContext = '';
       if (documents && documents.length > 0) {
-        // Limit document context to avoid exceeding token limits
-        const maxDocs = Math.min(documents.length, 15);
-        documentContext = `\n\nRELEVANT INFORMATION:\n${documents.slice(0, maxDocs).join('\n\n')}`;
+        // Format document content for better readability and reference
+        const formattedDocs = documents.map((doc, index) => {
+          // Parse out the document name from the content if it exists
+          const docNameMatch = doc.match(/\[(.*?)\]:/);
+          const docName = docNameMatch ? docNameMatch[1] : `Document ${index + 1}`;
+          // Remove the [docname]: prefix if it exists
+          const content = docNameMatch ? doc.replace(docNameMatch[0], '') : doc;
+          return `DOCUMENT: ${docName}\nCONTENT: ${content}\n`;
+        });
+        
+        // Limit document context to avoid exceeding token limits but ensure complete information
+        documentContext = `\n\nRELEVANT DOCUMENT INFORMATION:\n${formattedDocs.join('\n')}\n`;
       }
       
       // Format conversation history in a simple text format with clear role distinctions
@@ -234,8 +312,24 @@ router.post('/chat', async (req, res) => {
         ? context.map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.parts[0].text}`).join('\n\n') 
         : '';
         
+      // Enhanced system prompt for document analysis
+      let enhancedSystemPrompt = systemPrompt;
+      
+      if (isDocumentAnalysis) {
+        enhancedSystemPrompt += `
+
+DOCUMENT ANALYSIS INSTRUCTIONS:
+1. You are analyzing documents for the user. This is VERY IMPORTANT to them.
+2. You MUST provide a COMPLETE analysis without stopping mid-analysis.
+3. When summarizing documents, you MUST finish the entire summary.
+4. Include specific key information from the documents.
+5. Do NOT say "I'll analyze this" or "Let me look at this" - just start the analysis directly.
+6. Always reference document names when discussing their content.
+7. Use clear section headings and bullet points to organize your analysis.`;
+      }
+      
       // Combine all context into a single prompt with enhanced instructions
-      const fullPrompt = `${systemPrompt}
+      const fullPrompt = `${enhancedSystemPrompt}
 
 IMPORTANT: 
 1. Remember key personal information about the user throughout the conversation, such as their name, preferences, or any personal details they share.
@@ -246,6 +340,8 @@ IMPORTANT:
    - Use line breaks to structure your response
 3. You have full creative capabilities - you can write stories, fables, poems, jokes, or any other creative content the user requests.
 4. Be helpful, creative, and thorough in your responses.
+5. When analyzing documents, ALWAYS provide complete responses without stopping mid-analysis. If you start to summarize a document, complete the summary.
+6. Include specific information from documents when answering questions about them, don't just acknowledge you've seen them.
 
 ${documentContext}
 
@@ -253,22 +349,43 @@ ${historyText.length > 0 ? 'Previous conversation:\n' + historyText + '\n\n' : '
 User: ${message}
 Assistant:`;
 
-      // Generate content with the combined prompt
-      const result = await model.generateContent(fullPrompt);
-      const response = result.response;
-      const text = response.text();
+      // For document analysis, increase the timeout
+      const timeout = isDocumentAnalysis ? 120000 : 60000; // 2 minutes for doc analysis, 1 minute otherwise
       
-      // Return the AI response
-      res.json({
-        success: true,
-        response: text,
-        model: selectedModel,
-        contextSize: {
-          historyItems: context.length,
-          documentItems: documents.length,
-          usedDocuments: documentContext ? Math.min(documents.length, 15) : 0
+      // Generate content with the combined prompt and a timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeout);
+      
+      try {
+        const result = await model.generateContentStream(fullPrompt);
+        clearTimeout(timeoutId);
+        
+        // Process the streaming response
+        let fullResponse = '';
+        for await (const chunk of result.stream) {
+          fullResponse += chunk.text();
         }
-      });
+        
+        // Return the AI response
+        res.json({
+          success: true,
+          response: fullResponse,
+          model: selectedModel,
+          contextSize: {
+            historyItems: context.length,
+            documentItems: documents.length,
+            usedDocuments: documentContext ? Math.min(documents.length, 15) : 0
+          }
+        });
+      } catch (streamError) {
+        clearTimeout(timeoutId);
+        
+        if (streamError.name === 'AbortError') {
+          console.error('Request timed out after', timeout/1000, 'seconds');
+          throw new Error(`Request timed out after ${timeout/1000} seconds. Try a shorter document or a more specific question.`);
+        }
+        throw streamError;
+      }
     } catch (modelError) {
       console.error('Model error:', modelError);
       
@@ -328,4 +445,8 @@ router.get('/status', async (req, res) => {
   }
 });
 
-module.exports = router;
+module.exports = {
+  router,
+  generateSummary, // Export for use in Zep integration
+  sendMessage
+};

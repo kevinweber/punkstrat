@@ -259,7 +259,20 @@ img {
   display: flex;
   justify-content: center;
   align-items: center;
-  min-width: 60px;
+  min-width: 120px;
+  padding: 8px 12px;
+}
+
+.loading-indicator {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.loading-text {
+  font-size: 0.8rem;
+  margin-top: 5px;
+  color: #aaa;
 }
 
 .dot {
@@ -278,6 +291,19 @@ img {
 
 .dot:nth-child(3) {
   animation-delay: 0.4s;
+}
+
+.timeout-alert {
+  color: #e74c3c;
+  font-size: 0.9rem;
+  margin-top: 5px;
+  display: flex;
+  align-items: center;
+}
+
+.timeout-alert::before {
+  content: "⚠️";
+  margin-right: 5px;
 }
 
 @keyframes dot-pulse {
@@ -374,15 +400,43 @@ img {
 
 .uploaded-pdfs li {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 8px 12px;
-  margin: 5px 0;
+  flex-direction: column;
+  padding: 12px;
+  margin: 8px 0;
   background-color: #fff;
   border: 1px solid #e0e0e0;
   border-radius: 4px;
   font-size: 14px;
   color: #333;
+}
+
+.pdf-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.pdf-name {
+  font-weight: bold;
+  font-size: 15px;
+}
+
+.pdf-details {
+  display: flex;
+  align-items: center;
+  color: #666;
+  font-size: 12px;
+}
+
+.pdf-summary {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #555;
+  line-height: 1.4;
+  border-top: 1px solid #eee;
+  padding-top: 6px;
+  font-style: italic;
 }
 
 .delete-pdf-button {

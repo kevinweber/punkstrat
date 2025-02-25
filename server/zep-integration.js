@@ -128,10 +128,7 @@ router.post('/upload-pdf', upload.single('files'), async (req, res) => {
       return res.status(400).json({ error: 'No PDF file uploaded' });
     }
 
-    const { userId } = req.body;
-    if (!userId) {
-      return res.status(400).json({ error: 'userId is required' });
-    }
+    const { userId = 'default' } = req.body;
 
     // Ensure session exists for this user
     const session = ensureSession(userId);
@@ -155,37 +152,42 @@ router.post('/upload-pdf', upload.single('files'), async (req, res) => {
       session_id: session.uuid
     };
     
-    // Split the text into chunks to handle large documents
-    const chunkSize = 1000; // characters per chunk
+    // Get the full text
     const text = pdfData.text;
-    const chunks = [];
     
-    for (let i = 0; i < text.length; i += chunkSize) {
-      chunks.push(text.slice(i, i + chunkSize));
-    }
+    // Create a unique document ID
+    const documentId = `pdf-${Date.now()}-${Math.round(Math.random() * 1E9)}`;
     
-    // Add each chunk to memory
-    const documentIds = [];
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      if (chunk.trim().length === 0) continue;
-      
-      const documentId = `pdf-${Date.now()}-${i}-${Math.round(Math.random() * 1E9)}`;
-      
-      memoryStore.documents.push({
-        id: documentId,
-        content: chunk,
-        session_id: session.uuid,
-        metadata: {
-          ...metadata,
-          chunkIndex: i,
-          totalChunks: chunks.length,
-          document_id: documentId
+    // Generate document summary using AI (if available)
+    let summary = `PDF with ${pdfData.numpages} pages and ${text.length} characters`;
+    
+    try {
+      // If we have the AI integration available
+      const aiModule = require('./ai-integration');
+      if (aiModule.generateSummary) {
+        // Generate an AI summary (limit text length to avoid token limits)
+        const textForSummary = text.length > 10000 ? text.substring(0, 10000) + '...' : text;
+        const summaryResult = await aiModule.generateSummary(textForSummary, req.file.originalname);
+        if (summaryResult && summaryResult.summary) {
+          summary = summaryResult.summary;
         }
-      });
-      
-      documentIds.push(documentId);
+      }
+    } catch (summaryError) {
+      console.warn('Unable to generate AI summary:', summaryError.message);
+      // Continue with basic summary if AI summary generation fails
     }
+    
+    // Store the entire document content and metadata
+    memoryStore.documents.push({
+      id: documentId,
+      content: text,
+      session_id: session.uuid,
+      metadata: {
+        ...metadata,
+        document_id: documentId,
+        summary: summary
+      }
+    });
     
     // Update session last interaction time
     session.updated_at = new Date().toISOString();
@@ -197,11 +199,10 @@ router.post('/upload-pdf', upload.single('files'), async (req, res) => {
       success: true, 
       filename: req.file.originalname,
       filetype: req.file.mimetype,
-      documentIds,
-      totalChunks: chunks.length,
+      documentId,
       pages: pdfData.numpages,
       sessionId: session.uuid,
-      summary: `Processed ${chunks.length} chunks from PDF with ${pdfData.numpages} pages`
+      summary: summary
     });
   } catch (error) {
     console.error('Error processing PDF:', error);
@@ -218,11 +219,7 @@ router.post('/upload-pdf', upload.single('files'), async (req, res) => {
 // Search memory for document content
 router.get('/documents/search', async (req, res) => {
   try {
-    const { query, userId, limit = 15 } = req.query;
-    
-    if (!userId) {
-      return res.status(400).json({ error: 'userId is required' });
-    }
+    const { query, userId = 'default', limit = 15 } = req.query;
     
     // Filter documents by user ID and source, then by query content if provided
     let filteredDocs = memoryStore.documents.filter(doc => {
@@ -239,20 +236,37 @@ router.get('/documents/search', async (req, res) => {
       return true;
     });
     
-    // Sort by relevance if query is provided (basic implementation)
-    if (query) {
-      filteredDocs.sort((a, b) => {
-        // Simple relevance scoring - count occurrences of the query
-        const scoreA = (a.content.toLowerCase().match(new RegExp(query.toLowerCase(), 'g')) || []).length;
-        const scoreB = (b.content.toLowerCase().match(new RegExp(query.toLowerCase(), 'g')) || []).length;
-        return scoreB - scoreA; // Higher score first
-      });
-    }
+    // Sort by timestamp (newest first)
+    filteredDocs.sort((a, b) => {
+      return new Date(b.metadata.timestamp) - new Date(a.metadata.timestamp);
+    });
     
-    // Limit results
+    // Limit results and format for response
     const results = filteredDocs.slice(0, parseInt(limit, 10)).map(doc => {
+      // Create an excerpt around the query term if it exists
+      let excerpt = doc.content;
+      if (query) {
+        const queryIndex = doc.content.toLowerCase().indexOf(query.toLowerCase());
+        if (queryIndex !== -1) {
+          // Get a reasonable excerpt around the query match
+          const start = Math.max(0, queryIndex - 100);
+          const end = Math.min(doc.content.length, queryIndex + query.length + 300);
+          excerpt = doc.content.substring(start, end);
+          
+          // Add ellipsis if we're not showing the beginning or end
+          if (start > 0) excerpt = '...' + excerpt;
+          if (end < doc.content.length) excerpt = excerpt + '...';
+        } else {
+          // If query not found directly, just take the first section
+          excerpt = doc.content.substring(0, 400) + '...';
+        }
+      } else {
+        // No query, just take the first section
+        excerpt = doc.content.substring(0, 400) + '...';
+      }
+      
       return {
-        content: doc.content,
+        content: excerpt,
         document: {
           id: doc.id,
           metadata: {
@@ -278,11 +292,7 @@ router.get('/documents/search', async (req, res) => {
 // Get a list of PDF files in the memory
 router.get('/pdfs', async (req, res) => {
   try {
-    const { userId } = req.query;
-    
-    if (!userId) {
-      return res.status(400).json({ error: 'userId is required' });
-    }
+    const { userId = 'default' } = req.query;
     
     // Filter documents by user ID and source
     const pdfDocs = memoryStore.documents.filter(
@@ -290,24 +300,27 @@ router.get('/pdfs', async (req, res) => {
     );
     
     // Extract unique filenames
-    const pdfs = new Map();
+    const pdfs = [];
+    const seenFilenames = new Set();
+    
     pdfDocs.forEach(doc => {
-      const { filename, timestamp } = doc.metadata;
-      if (filename && !pdfs.has(filename)) {
-        pdfs.set(filename, {
+      const { filename, timestamp, pages } = doc.metadata;
+      if (filename && !seenFilenames.has(filename)) {
+        seenFilenames.add(filename);
+        pdfs.push({
           filename,
           timestamp,
-          chunks: 1
+          pages: pages || 1
         });
-      } else if (filename) {
-        const pdf = pdfs.get(filename);
-        pdf.chunks += 1;
       }
     });
     
+    // Sort by timestamp (newest first)
+    pdfs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    
     res.json({
       success: true,
-      pdfs: Array.from(pdfs.values())
+      pdfs
     });
   } catch (error) {
     console.error('Error retrieving PDF list:', error);
@@ -354,16 +367,12 @@ router.delete('/memory/:documentId', async (req, res) => {
 router.delete('/pdfs/:filename', async (req, res) => {
   try {
     const { filename } = req.params;
-    const { userId } = req.query;
+    const { userId = 'default' } = req.query;
     
-    if (!userId) {
-      return res.status(400).json({ error: 'userId is required' });
-    }
-    
-    // Filter documents to find PDF chunks with matching filename
+    // Filter documents to find PDF with matching filename
     const initialCount = memoryStore.documents.length;
     
-    // Remove PDF chunks from documents
+    // Remove PDF from documents
     memoryStore.documents = memoryStore.documents.filter(
       doc => !(doc.metadata.userId === userId && 
               doc.metadata.source === 'pdf' && 
@@ -374,7 +383,7 @@ router.delete('/pdfs/:filename', async (req, res) => {
     
     res.json({ 
       success: true,
-      deletedChunks: deletedCount
+      deletedCount
     });
   } catch (error) {
     console.error('Error deleting PDF from memory:', error);
@@ -405,41 +414,30 @@ router.get('/status', async (req, res) => {
 // Get a list of documents
 router.get('/documents', async (req, res) => {
   try {
-    const { userId } = req.query;
-    
-    if (!userId) {
-      return res.status(400).json({ error: 'userId is required' });
-    }
+    const { userId = 'default' } = req.query;
     
     // Filter PDF documents by user ID
     const pdfDocs = memoryStore.documents.filter(
       doc => doc.metadata.userId === userId && doc.metadata.source === 'pdf'
     );
     
-    // Group by filename to count chunks and get metadata
-    const docsMap = new Map();
-    
-    pdfDocs.forEach(doc => {
-      const filename = doc.metadata.filename;
-      if (!docsMap.has(filename)) {
-        docsMap.set(filename, {
-          name: filename,
-          chunk_count: 1,
-          metadata: {
-            pages: doc.metadata.pages,
-            filesize: doc.metadata.filesize,
-            timestamp: doc.metadata.timestamp
-          }
-        });
-      } else {
-        const docEntry = docsMap.get(filename);
-        docEntry.chunk_count += 1;
+    // Extract document info
+    const documents = pdfDocs.map(doc => ({
+      name: doc.metadata.filename,
+      id: doc.id,
+      metadata: {
+        pages: doc.metadata.pages || 1,
+        filesize: doc.metadata.filesize,
+        timestamp: doc.metadata.timestamp
       }
-    });
+    }));
+    
+    // Sort by timestamp (newest first)
+    documents.sort((a, b) => new Date(b.metadata.timestamp) - new Date(a.metadata.timestamp));
     
     res.json({
       success: true,
-      documents: Array.from(docsMap.values())
+      documents
     });
   } catch (error) {
     console.error('Error retrieving documents:', error);

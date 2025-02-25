@@ -10,8 +10,14 @@ const AI_API_URL = '/api/ai';
 const MEMORY_ENDPOINT = `${API_BASE_URL}/memory`;
 const STATUS_ENDPOINT = `${AI_API_URL}/status`;
 
-// Fixed user ID (in a real app, this would come from authentication)
-const USER_ID = 'user1';
+// Get user ID from URL query parameters or use default
+function getUserId() {
+  const urlParams = new URLSearchParams(window.location.search);
+  return urlParams.get('userId') || 'default';
+}
+
+// Use a stable user ID
+const USER_ID = getUserId();
 
 // Format message with support for Markdown-like syntax and line breaks
 const formatMessage = (message) => {
@@ -63,6 +69,7 @@ export default function PersonalAgent() {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingTime, setLoadingTime] = useState(0);
   const [aiStatus, setAiStatus] = useState({ isConfigured: false });
   const [uploadedPdfs, setUploadedPdfs] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -74,6 +81,7 @@ export default function PersonalAgent() {
   const conversationHistory = useRef([]);
   const fileInputRef = useRef(null);
   const documentContext = useRef([]);
+  const loadingTimerRef = useRef(null);
 
   // Initialize and load data on component mount
   useEffect(() => {
@@ -108,6 +116,22 @@ export default function PersonalAgent() {
       messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [messages]);
+
+  // Use effect for loading timer
+  useEffect(() => {
+    if (isLoading) {
+      setLoadingTime(0);
+      loadingTimerRef.current = setInterval(() => {
+        setLoadingTime(prevTime => prevTime + 1);
+      }, 1000);
+    } else {
+      clearInterval(loadingTimerRef.current);
+    }
+    
+    return () => {
+      clearInterval(loadingTimerRef.current);
+    };
+  }, [isLoading]);
 
   // Check AI API status
   const checkAiStatus = async () => {
@@ -193,7 +217,7 @@ export default function PersonalAgent() {
       if (data && data.documents) {
         setUploadedPdfs(data.documents.map(doc => ({
           name: doc.name,
-          chunks: doc.chunk_count || 0,
+          summary: doc.metadata?.summary || 'No summary available',
           pages: doc.metadata?.pages || '?'
         })));
         
@@ -247,41 +271,61 @@ export default function PersonalAgent() {
       ...prev,
       {
         role: 'system',
-        content: `Processing ${files.length} PDF file(s)...`
+        content: `Processing ${files.length} PDF file(s)... This may take a moment as I analyze each document.`
       }
     ]);
     
-    const formData = new FormData();
-    files.forEach(file => {
-      formData.append('files', file);
-    });
-    formData.append('userId', USER_ID);
-    
     try {
-      const response = await fetch('/api/zep/upload-pdf', {
-        method: 'POST',
-        body: formData
-      });
+      // Upload each file sequentially for better reliability
+      const results = [];
       
-      if (!response.ok) {
-        throw new Error(`Upload failed: ${response.status}`);
+      for (const file of files) {
+        setMessages(prev => [
+          ...prev,
+          {
+            role: 'system',
+            content: `Analyzing "${file.name}"...`
+          }
+        ]);
+        
+        const formData = new FormData();
+        formData.append('files', file);
+        formData.append('userId', USER_ID);
+        
+        const response = await fetch('/api/zep/upload-pdf', {
+          method: 'POST',
+          body: formData
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Upload failed for ${file.name}: ${response.status}`);
+        }
+        
+        const result = await response.json();
+        results.push(result);
+        
+        setMessages(prev => [
+          ...prev,
+          {
+            role: 'system',
+            content: `Finished processing "${file.name}".`
+          }
+        ]);
       }
       
-      const result = await response.json();
-      
       // Update uploaded PDFs list
-      loadUploadedPdfs();
+      await loadUploadedPdfs();
       
-      // Inform user of successful upload
+      // Inform user of successful upload with clearer instructions
       setMessages(prev => [
         ...prev,
         {
           role: 'system',
-          content: `Successfully processed ${files.length} PDF file(s). You can now ask questions about these documents.`
+          content: `Successfully processed ${files.length} PDF file(s). ✅\n\nYou can now ask questions like:\n- "Summarize [document name]"\n- "What are the key points in [document name]?"\n- "Extract important information from [document name]"`
         }
       ]);
       
-      // Add system message about added content
+      // Add system message about added content for the AI
       const fileNames = Array.from(files).map(file => file.name).join(', ');
       
       // Add special message specifically for the AI to know about the PDFs
@@ -289,7 +333,7 @@ export default function PersonalAgent() {
         ...conversationHistory.current,
         {
           role: 'system',
-          content: `The user has uploaded the following PDFs: ${fileNames}. Please refer to these documents by name when discussing their content.`
+          content: `The user has uploaded the following PDFs: ${fileNames}. Please refer to these documents by name when discussing their content. If asked to summarize or analyze a document, provide a comprehensive analysis that covers all major points in the document.`
         }
       ];
     } catch (error) {
@@ -327,10 +371,27 @@ export default function PersonalAgent() {
       // Get relevant document context for the query
       let documentContext = [];
       try {
-        const docResponse = await fetch(`/api/zep/documents/search?userId=${USER_ID}&query=${encodeURIComponent(input)}`);
+        const encodedQuery = encodeURIComponent(input);
+        const docResponse = await fetch(`/api/zep/documents/search?userId=${USER_ID}&query=${encodedQuery}`);
+        
         if (docResponse.ok) {
           const docData = await docResponse.json();
+          
           if (docData.success && docData.results && docData.results.length > 0) {
+            // Add this information to the message history to track what PDF is being referenced
+            const docNames = new Set(docData.results.map(r => r.document.metadata.name));
+            
+            if (docNames.size > 0) {
+              setMessages(prev => [
+                ...prev,
+                {
+                  role: 'system',
+                  content: `Analyzing document(s): ${Array.from(docNames).join(', ')}`
+                }
+              ]);
+            }
+            
+            // Format document context for the AI
             documentContext = docData.results.map(result => {
               const docName = result.document.metadata?.name || 'Unknown document';
               return `[${docName}]: ${result.content}`;
@@ -353,7 +414,10 @@ export default function PersonalAgent() {
         parts: [{ text: msg.content }]
       }));
       
-      // Send request to AI
+      // Send request to AI with increased timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+      
       const response = await fetch('/api/ai/chat', {
         method: 'POST',
         headers: {
@@ -366,8 +430,11 @@ export default function PersonalAgent() {
           context: formattedHistory,
           documents: documentContext,
           systemPrompt: `You are a helpful and knowledgeable AI assistant. ${personalInfo.length > 0 ? 'Important information about the user: ' + personalInfo.join('. ') : ''}`
-        })
+        }),
+        signal: controller.signal
       });
+      
+      clearTimeout(timeoutId);
       
       if (!response.ok) {
         throw new Error(`AI API error: ${response.status}`);
@@ -557,9 +624,7 @@ export default function PersonalAgent() {
       return;
     }
     
-    if (pdfFiles.length > 0) {
-      handlePdfUpload(pdfFiles);
-    }
+    handlePdfUpload(pdfFiles);
   };
 
   // Handle file selection from input
@@ -641,9 +706,19 @@ export default function PersonalAgent() {
         ${isLoading && html`
           <div class="message assistant">
             <div class="message-content loading">
-              <span class="dot"></span>
-              <span class="dot"></span>
-              <span class="dot"></span>
+              <div class="loading-indicator">
+                <div>
+                  <span class="dot"></span>
+                  <span class="dot"></span>
+                  <span class="dot"></span>
+                </div>
+                <span class="loading-text">Processing (${loadingTime}s)...</span>
+                ${loadingTime > 30 && html`
+                  <div class="timeout-alert">
+                    This is taking longer than usual. The AI is working on analyzing the document...
+                  </div>
+                `}
+              </div>
             </div>
           </div>
         `}
@@ -689,14 +764,20 @@ export default function PersonalAgent() {
             <ul>
               ${uploadedPdfs.map(pdf => html`
                 <li>
-                  ${pdf.name || pdf.filename} (${pdf.chunks} chunks, ${pdf.pages || '?'} pages)
-                  <button 
-                    class="delete-pdf-button" 
-                    onClick=${() => handleDeletePdf(pdf.name || pdf.filename)}
-                    title="Delete this PDF"
-                  >
-                    ×
-                  </button>
+                  <div class="pdf-item">
+                    <div class="pdf-name">${pdf.name || pdf.filename}</div>
+                    <div class="pdf-details">
+                      ${pdf.pages ? `${pdf.pages} pages` : ''} 
+                      <button 
+                        class="delete-pdf-button" 
+                        onClick=${() => handleDeletePdf(pdf.name || pdf.filename)}
+                        title="Delete this PDF"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+                  <div class="pdf-summary">${pdf.summary}</div>
                 </li>
               `)}
             </ul>
