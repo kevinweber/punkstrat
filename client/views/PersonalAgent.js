@@ -5,23 +5,6 @@ import LogoLinkHome from '../components/LogoLinkHome.js';
 const html = htm.bind(h);
 
 /**
- * Generate or retrieve a consistent user ID for the session
- * @returns {string} User ID
- */
-function getUserId() {
-  const existingId = sessionStorage.getItem('punkstrat_user_id');
-  if (existingId) return existingId;
-  
-  // Create a new random ID and store it
-  const newId = 'user_' + Math.random().toString(36).substring(2, 15);
-  sessionStorage.setItem('punkstrat_user_id', newId);
-  return newId;
-}
-
-// User ID for the current session
-const USER_ID = getUserId();
-
-/**
  * Format message content with markdown-like syntax for display
  * @param {string} message - The message text to format
  * @returns {string} HTML formatted message
@@ -402,7 +385,7 @@ export default function PersonalAgent() {
       </div>
       
       <div class="footer-note">
-        Powered by Google Gemini Models | Using ${selectedModel || 'default'} model | Conversation stored locally in your browser
+        Using ${selectedModel || 'default'} model | Conversation stored locally in your browser
       </div>
       
       <${LogoLinkHome}/>

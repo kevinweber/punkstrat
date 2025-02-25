@@ -6,7 +6,6 @@ console.log('API Key loaded:', process.env.GOOGLE_AI_API_KEY ? 'YES (length: ' +
 
 const express = require('express');
 const path = require('path');
-const fs = require('fs');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const aiIntegration = require('./ai-integration');
