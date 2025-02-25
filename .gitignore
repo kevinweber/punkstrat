@@ -1,6 +1,9 @@
 # dependencies
 /node_modules
 
+# security & privacy
+.env
+
 # misc
 .DS_Store
 npm-debug.log*
